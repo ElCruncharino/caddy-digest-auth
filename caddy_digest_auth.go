@@ -581,6 +581,9 @@ func (da *DigestAuth) Validate() error {
 	if da.UserFile == "" && len(da.Users) == 0 {
 		return fmt.Errorf("either user_file or users must be specified")
 	}
+	if da.UserFile != "" && len(da.Users) > 0 {
+		return fmt.Errorf("cannot specify both inline users and user_file")
+	}
 	return nil
 }
 
