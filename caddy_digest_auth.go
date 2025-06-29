@@ -1,0 +1,626 @@
+package caddy_digest_auth
+
+import (
+	"bufio"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"go.uber.org/zap"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
+)
+
+// The rug ties the room together (for context cleanup)
+var rugCleanup sync.Once
+// stranger: sometimes there's a logger, well, he's the logger for his time and place (unused)
+
+func init() {
+	fmt.Println("Loading Caddy Digest Auth module...")
+	caddy.RegisterModule(DigestAuth{})
+	httpcaddyfile.RegisterHandlerDirective("digest_auth", parseCaddyfileDigestAuth)
+	fmt.Println("Caddy Digest Auth module registered with ID: http.handlers.digest_auth")
+}
+
+// DigestAuth implements HTTP Digest Authentication for Caddy
+type DigestAuth struct {
+	// Configuration fields
+	Realm           string   `json:"realm,omitempty"`
+	UserFile        string   `json:"user_file,omitempty"`
+	Users           []User   `json:"users,omitempty"`           // Inline user credentials
+	ExcludePaths    []string `json:"exclude_paths,omitempty"`    // Paths that don't require authentication
+	Expires         int      `json:"expires,omitempty"`         // Nonce expiration in seconds
+	Replays         int      `json:"replays,omitempty"`         // Max nonce reuses
+	Timeout         int      `json:"timeout,omitempty"`         // Nonce timeout in seconds
+	RateLimitBurst  int      `json:"rate_limit_burst,omitempty"`  // Rate limiting burst
+	RateLimitWindow int      `json:"rate_limit_window,omitempty"` // Rate limiting window in seconds
+
+	// Internal state
+	credentials map[string]credential
+	nonces      map[string]*nonceData
+	rateLimits  map[string]*rateLimitData
+	salt        string
+	mutex       sync.RWMutex
+	logger      *zap.Logger
+}
+
+// User represents an inline user credential
+type User struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// credential represents a user's digest authentication credentials
+type credential struct {
+	Realm  string `json:"realm"`
+	Cipher string `json:"cipher"` // MD5(username:realm:password)
+}
+
+// nonceData stores nonce metadata for validation and replay protection
+type nonceData struct {
+	Timestamp   int64  `json:"timestamp"`
+	Counter     int64  `json:"counter"`
+	NonceSalt   string `json:"nonce_salt"`
+	Opaque      string `json:"opaque"`
+	Uses        int    `json:"uses"`
+	ExpiresAt   int64  `json:"expires_at"`
+}
+
+// rateLimitData tracks failed authentication attempts
+type rateLimitData struct {
+	Attempts   int   `json:"attempts"`
+	FirstTry   int64 `json:"first_try"`
+	BlockedAt  int64 `json:"blocked_at"`
+}
+
+// CaddyModule returns the Caddy module information
+func (DigestAuth) CaddyModule() caddy.ModuleInfo {
+	return caddy.ModuleInfo{
+		ID:  "http.handlers.digest_auth",
+		New: func() caddy.Module { return new(DigestAuth) },
+	}
+}
+
+// Provision sets up the module
+func (da *DigestAuth) Provision(ctx caddy.Context) error {
+	da.logger = ctx.Logger(da)
+	
+	// Set defaults
+	if da.Realm == "" {
+		da.Realm = "Restricted Area"
+	}
+	if da.Expires == 0 {
+		da.Expires = 600 // 10 minutes
+	}
+	if da.Replays == 0 {
+		da.Replays = 500
+	}
+	if da.Timeout == 0 {
+		da.Timeout = 600 // 10 minutes
+	}
+	if da.RateLimitBurst == 0 {
+		da.RateLimitBurst = 50
+	}
+	if da.RateLimitWindow == 0 {
+		da.RateLimitWindow = 600 // 10 minutes
+	}
+
+	// Initialize maps
+	da.credentials = make(map[string]credential)
+	da.nonces = make(map[string]*nonceData)
+	da.rateLimits = make(map[string]*rateLimitData)
+
+	// Generate global salt
+	saltBytes := make([]byte, 16)
+	if _, err := rand.Read(saltBytes); err != nil {
+		return fmt.Errorf("failed to generate salt: %v", err)
+	}
+	da.salt = base64.StdEncoding.EncodeToString(saltBytes)
+
+	// Load user credentials
+	if err := da.loadCredentials(); err != nil {
+		return fmt.Errorf("failed to load credentials: %v", err)
+	}
+
+	// Start cleanup goroutine
+	go da.cleanupRoutine()
+
+	return nil
+}
+
+// ServeHTTP handles the HTTP request
+func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	remoteAddr := r.RemoteAddr
+
+	// Check if path should be excluded from authentication
+	if da.isPathExcluded(r.URL.Path) {
+		da.logger.Debug("path excluded from authentication",
+			zap.String("remote_addr", remoteAddr),
+			zap.String("path", r.URL.Path))
+		return next.ServeHTTP(w, r)
+	}
+
+	// Check rate limiting
+	if da.isRateLimited(remoteAddr) {
+		da.logger.Warn("client blocked by rate limiting",
+			zap.String("remote_addr", remoteAddr))
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return nil
+	}
+
+	// Check for Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		da.logger.Debug("no authorization header, issuing challenge",
+			zap.String("remote_addr", remoteAddr))
+		return da.sendChallenge(w, false)
+	}
+
+	// Parse and validate the authorization header
+	ctx, err := da.parseAuthHeader(authHeader, r.Method)
+	if err != nil {
+		da.logger.Warn("malformed authorization header",
+			zap.String("remote_addr", remoteAddr),
+			zap.Error(err))
+		da.incrementRateLimit(remoteAddr)
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return nil
+	}
+
+	// Verify the authentication
+	pass, stale := da.verify(ctx, remoteAddr)
+	if !pass {
+		da.incrementRateLimit(remoteAddr)
+		return da.sendChallenge(w, stale)
+	}
+
+	// Authentication successful, reset rate limit
+	da.resetRateLimit(remoteAddr)
+	
+	da.logger.Info("authentication successful",
+		zap.String("remote_addr", remoteAddr),
+		zap.String("username", ctx.user))
+
+	// Continue to next handler
+	return next.ServeHTTP(w, r)
+}
+
+// loadCredentials loads user credentials from the specified file or inline users
+func (da *DigestAuth) loadCredentials() error {
+	da.mutex.Lock()
+	defer da.mutex.Unlock()
+
+	// Load from inline users if provided
+	if len(da.Users) > 0 {
+		for _, user := range da.Users {
+			if user.Username == "" || user.Password == "" {
+				return fmt.Errorf("username and password are required for inline users")
+			}
+			
+			// Calculate MD5 hash: username:realm:password
+			ha1 := da.md5Hash(fmt.Sprintf("%s:%s:%s", user.Username, da.Realm, user.Password))
+			
+			da.credentials[user.Username] = credential{
+				Realm:  da.Realm,
+				Cipher: ha1,
+			}
+		}
+		da.logger.Info("loaded inline credentials", zap.Int("count", len(da.Users)))
+		return nil
+	}
+
+	// Load from htdigest file if provided
+	if da.UserFile != "" {
+		// Read the htdigest file
+		file, err := os.Open(da.UserFile)
+		if err != nil {
+			return fmt.Errorf("failed to open user file: %v", err)
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		lineNum := 0
+		
+		for scanner.Scan() {
+			lineNum++
+			line := strings.TrimSpace(scanner.Text())
+			
+			// Skip empty lines and comments
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			
+			// Parse htdigest format: username:realm:md5hash
+			parts := strings.Split(line, ":")
+			if len(parts) != 3 {
+				da.logger.Warn("invalid htdigest format", zap.Int("line", lineNum), zap.String("line", line))
+				continue
+			}
+			
+			username := parts[0]
+			realm := parts[1]
+			md5hash := parts[2]
+			
+			// Validate realm matches
+			if realm != da.Realm {
+				da.logger.Warn("realm mismatch", 
+					zap.String("username", username),
+					zap.String("expected_realm", da.Realm),
+					zap.String("file_realm", realm))
+				continue
+			}
+			
+			da.credentials[username] = credential{
+				Realm:  realm,
+				Cipher: md5hash,
+			}
+		}
+		
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("error reading user file: %v", err)
+		}
+		
+		da.logger.Info("loaded credentials from file", zap.Int("count", len(da.credentials)))
+		return nil
+	}
+
+	return fmt.Errorf("either user_file or users must be specified")
+}
+
+// generateNonce creates a new nonce with all required components
+func (da *DigestAuth) generateNonce() (string, *nonceData, error) {
+	// Generate random components
+	randomBytes := make([]byte, 64)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", nil, fmt.Errorf("failed to generate random bytes: %v", err)
+	}
+
+	entropy := randomBytes[:32]
+	nonceSalt := randomBytes[32:48]
+	opaque := randomBytes[48:64]
+
+	// Create nonce data
+	now := time.Now().Unix()
+	nonceData := &nonceData{
+		Timestamp: now,
+		Counter:   now, // Simplified counter
+		NonceSalt: base64.StdEncoding.EncodeToString(nonceSalt),
+		Opaque:    base64.StdEncoding.EncodeToString(opaque),
+		Uses:      0,
+		ExpiresAt: now + int64(da.Timeout),
+	}
+
+	// Create nonce string
+	nonceComponents := []string{
+		base64.StdEncoding.EncodeToString(entropy),
+		strconv.FormatInt(nonceData.Counter, 10),
+		strconv.FormatInt(now, 10),
+		nonceData.NonceSalt,
+		da.salt,
+		nonceData.Opaque,
+	}
+	nonce := base64.StdEncoding.EncodeToString([]byte(strings.Join(nonceComponents, ":")))
+
+	// Store nonce data
+	da.mutex.Lock()
+	da.nonces[nonce] = nonceData
+	da.mutex.Unlock()
+
+	return nonce, nonceData, nil
+}
+
+// sendChallenge sends a WWW-Authenticate header with digest challenge
+func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool) error {
+	nonce, nonceData, err := da.generateNonce()
+	if err != nil {
+		da.logger.Error("failed to generate nonce", zap.Error(err))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return nil
+	}
+
+	challenge := fmt.Sprintf(`Digest realm="%s", qop="auth", algorithm=MD5, nonce="%s", opaque="%s"`,
+		da.Realm, nonce, nonceData.Opaque)
+	
+	if stale {
+		challenge += ", stale=true"
+	}
+
+	w.Header().Set("WWW-Authenticate", challenge)
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	return nil
+}
+
+// parseAuthHeader parses the Authorization header
+func (da *DigestAuth) parseAuthHeader(header string, method string) (*authContext, error) {
+	if !strings.HasPrefix(header, "Digest ") {
+		return nil, fmt.Errorf("not a digest authorization header")
+	}
+
+	header = strings.TrimPrefix(header, "Digest ")
+	
+	ctx := &authContext{
+		method: method,
+	}
+	
+	// Parse key-value pairs
+	pairs := strings.Split(header, ",")
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		if strings.Contains(pair, "=") {
+			parts := strings.SplitN(pair, "=", 2)
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			
+			// Remove quotes if present
+			if strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
+				value = value[1 : len(value)-1]
+			}
+
+			switch key {
+			case "username":
+				ctx.user = value
+			case "realm":
+				ctx.realm = value
+			case "nonce":
+				ctx.nonce = value
+			case "uri":
+				ctx.uri = value
+			case "response":
+				ctx.response = value
+			case "qop":
+				ctx.qop = value
+			case "nc":
+				ctx.nc = value
+			case "cnonce":
+				ctx.cnonce = value
+			case "opaque":
+				ctx.opaque = value
+			case "method":
+				ctx.method = value
+			}
+		}
+	}
+
+	// Validate required fields
+	if ctx.user == "" || ctx.response == "" || ctx.uri == "" || ctx.nonce == "" || ctx.realm == "" {
+		return nil, fmt.Errorf("missing required fields")
+	}
+
+	// Validate qop if present
+	if ctx.qop != "" && (ctx.qop != "auth" || ctx.cnonce == "" || ctx.nc == "") {
+		return nil, fmt.Errorf("invalid qop value or missing cnonce/nc")
+	}
+
+	return ctx, nil
+}
+
+// authContext holds parsed authentication data
+type authContext struct {
+	user     string
+	realm    string
+	nonce    string
+	uri      string
+	response string
+	qop      string
+	nc       string
+	cnonce   string
+	opaque   string
+	method   string
+}
+
+// verify validates the authentication response
+func (da *DigestAuth) verify(ctx *authContext, remoteAddr string) (bool, bool) {
+	da.mutex.RLock()
+	cred, exists := da.credentials[ctx.user]
+	da.mutex.RUnlock()
+
+	if !exists || cred.Realm != ctx.realm {
+		da.logger.Warn("user not found or realm mismatch",
+			zap.String("remote_addr", remoteAddr),
+			zap.String("user", ctx.user))
+		return false, false
+	}
+
+	// Validate nonce
+	stale, nonceData := da.validateNonce(ctx.nonce)
+	if stale {
+		da.logger.Warn("nonce is stale",
+			zap.String("remote_addr", remoteAddr),
+			zap.String("user", ctx.user))
+		return false, true
+	}
+
+	// Validate opaque if present
+	if ctx.opaque != "" && nonceData != nil && ctx.opaque != nonceData.Opaque {
+		da.logger.Warn("opaque mismatch",
+			zap.String("remote_addr", remoteAddr),
+			zap.String("user", ctx.user))
+		return false, false
+	}
+
+	// Calculate expected response
+	ha1 := cred.Cipher
+	ha2 := da.md5Hash(fmt.Sprintf("%s:%s", ctx.method, ctx.uri))
+
+	var expectedResponse string
+	if ctx.qop != "" {
+		expectedResponse = da.md5Hash(fmt.Sprintf("%s:%s:%s:%s:%s:%s",
+			ha1, ctx.nonce, ctx.nc, ctx.cnonce, ctx.qop, ha2))
+	} else {
+		expectedResponse = da.md5Hash(fmt.Sprintf("%s:%s:%s", ha1, ctx.nonce, ha2))
+	}
+
+	if expectedResponse != ctx.response {
+		da.logger.Warn("invalid response",
+			zap.String("remote_addr", remoteAddr),
+			zap.String("user", ctx.user))
+		return false, false
+	}
+
+	return true, false
+}
+
+// validateNonce checks if a nonce is valid and not stale
+func (da *DigestAuth) validateNonce(nonce string) (bool, *nonceData) {
+	da.mutex.Lock()
+	defer da.mutex.Unlock()
+
+	nonceData, exists := da.nonces[nonce]
+	if !exists {
+		return true, nil
+	}
+
+	// Check expiration
+	if time.Now().Unix() > nonceData.ExpiresAt {
+		delete(da.nonces, nonce)
+		return true, nonceData
+	}
+
+	// Check replay limit
+	if nonceData.Uses >= da.Replays {
+		delete(da.nonces, nonce)
+		return true, nonceData
+	}
+
+	// Increment usage count
+	nonceData.Uses++
+	return false, nonceData
+}
+
+// md5Hash calculates MD5 hash of a string
+func (da *DigestAuth) md5Hash(input string) string {
+	hash := md5.Sum([]byte(input))
+	return fmt.Sprintf("%x", hash)
+}
+
+// isRateLimited checks if a client is rate limited
+func (da *DigestAuth) isRateLimited(remoteAddr string) bool {
+	da.mutex.RLock()
+	defer da.mutex.RUnlock()
+
+	rateData, exists := da.rateLimits[remoteAddr]
+	if !exists {
+		return false
+	}
+
+	now := time.Now().Unix()
+	if now-rateData.FirstTry > int64(da.RateLimitWindow) {
+		// Reset if window has passed
+		delete(da.rateLimits, remoteAddr)
+		return false
+	}
+
+	return rateData.Attempts >= da.RateLimitBurst
+}
+
+// incrementRateLimit increments the rate limit counter for a client
+func (da *DigestAuth) incrementRateLimit(remoteAddr string) {
+	da.mutex.Lock()
+	defer da.mutex.Unlock()
+
+	now := time.Now().Unix()
+	rateData, exists := da.rateLimits[remoteAddr]
+	
+	if !exists {
+		rateData = &rateLimitData{
+			Attempts: 1,
+			FirstTry: now,
+		}
+		da.rateLimits[remoteAddr] = rateData
+	} else {
+		rateData.Attempts++
+	}
+}
+
+// resetRateLimit resets the rate limit for a client
+func (da *DigestAuth) resetRateLimit(remoteAddr string) {
+	da.mutex.Lock()
+	defer da.mutex.Unlock()
+	delete(da.rateLimits, remoteAddr)
+}
+
+// cleanupRoutine periodically cleans up expired nonces and rate limits
+// The Dude abides: this routine keeps things tidy, man
+func (da *DigestAuth) cleanupRoutine() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		da.mutex.Lock()
+		
+		now := time.Now().Unix()
+		
+		// Clean up expired nonces
+		for nonce, nonceData := range da.nonces {
+			if now > nonceData.ExpiresAt {
+				delete(da.nonces, nonce)
+			}
+		}
+
+		// Clean up expired rate limits
+		for remoteAddr, rateData := range da.rateLimits {
+			if now-rateData.FirstTry > int64(da.RateLimitWindow) {
+				delete(da.rateLimits, remoteAddr)
+			}
+		}
+
+		da.mutex.Unlock()
+	}
+}
+
+// Validate validates the module configuration
+func (da *DigestAuth) Validate() error {
+	if da.UserFile == "" && len(da.Users) == 0 {
+		return fmt.Errorf("either user_file or users must be specified")
+	}
+	return nil
+}
+
+// isPathExcluded checks if the given path should be excluded from authentication
+func (da *DigestAuth) isPathExcluded(path string) bool {
+	if len(da.ExcludePaths) == 0 {
+		return false
+	}
+	
+	for _, excludePath := range da.ExcludePaths {
+		// Handle wildcard patterns
+		if strings.HasSuffix(excludePath, "/*") {
+			// Remove the wildcard and check prefix
+			prefix := strings.TrimSuffix(excludePath, "/*")
+			if strings.HasPrefix(path, prefix) {
+				return true
+			}
+		} else {
+			// Exact match or simple prefix matching
+			if strings.HasPrefix(path, excludePath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// parseCaddyfileDigestAuth parses the digest_auth directive in the Caddyfile
+func parseCaddyfileDigestAuth(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+	da := new(DigestAuth)
+	err := da.UnmarshalCaddyfile(h.Dispenser)
+	if err != nil {
+		return nil, err
+	}
+	return da, nil
+}
+
+// Interface guards
+var (
+	_ caddy.Provisioner           = (*DigestAuth)(nil)
+	_ caddy.Validator             = (*DigestAuth)(nil)
+	_ caddyhttp.MiddlewareHandler = (*DigestAuth)(nil)
+)

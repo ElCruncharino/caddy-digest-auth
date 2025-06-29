@@ -1,0 +1,42 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":80"],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "digest_auth",
+                  "realm": "Protected Area",
+                  "user_file": "/etc/caddy/users.json",
+                  "exclude_paths": [
+                    "/public/*",
+                    "/health",
+                    "/metrics",
+                    "/api/status",
+                    "/docs/*"
+                  ],
+                  "expires": 600,
+                  "replays": 500,
+                  "timeout": 600,
+                  "rate_limit_burst": 50,
+                  "rate_limit_window": 600
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "localhost:8080"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+} 

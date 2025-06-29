@@ -1,0 +1,10 @@
+{
+  "name": "caddy-digest-auth",
+  "description": "A Caddy v2 module providing HTTP Digest Authentication (RFC 2617) with flexible user management.",
+  "module_path": "github.com/ElCruncharino/caddy-digest-auth",
+  "version": "v1.0.0",
+  "project_url": "https://github.com/ElCruncharino/caddy-digest-auth",
+  "caddy_version": "2.7.6",
+  "author": "ElCruncharino",
+  "license": "MIT"
+} 

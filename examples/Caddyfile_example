@@ -1,0 +1,64 @@
+# Example Caddyfile showing how to use the digest authentication module
+# The module supports three approaches for user management
+
+# ========================================
+# Approach 1: Inline Users (Good for small numbers)
+# ========================================
+example.com {
+    # Basic digest authentication with inline users
+    digest_auth {
+        realm "Protected Area"
+        users {
+            admin "your_secure_password"
+            user "user123"
+        }
+    }
+    
+    reverse_proxy localhost:8080
+}
+
+# ========================================
+# Approach 2: JSON User File (Good for large numbers)
+# ========================================
+large-site.example.com {
+    # Use JSON file for many users (500+ users)
+    digest_auth {
+        realm "Protected Area"
+        user_file /etc/caddy/users.json
+        exclude_paths /public/* /health /metrics
+    }
+    
+    reverse_proxy localhost:8080
+}
+
+# ========================================
+# Approach 3: htdigest File (Traditional approach)
+# ========================================
+traditional.example.com {
+    # Use htdigest file (compatible with Apache/nginx)
+    digest_auth {
+        realm "Protected Area"
+        user_file /etc/caddy/users.htdigest
+        exclude_paths /public/*
+    }
+    
+    reverse_proxy localhost:8080
+}
+
+# ========================================
+# Advanced Configuration Example
+# ========================================
+advanced.example.com {
+    digest_auth {
+        realm "My Protected Site"
+        user_file /etc/caddy/users.json
+        exclude_paths /public/* /health /metrics /api/status
+        expires 600
+        replays 500
+        timeout 600
+        rate_limit_burst 50
+        rate_limit_window 600
+    }
+    
+    reverse_proxy localhost:8080
+} 
