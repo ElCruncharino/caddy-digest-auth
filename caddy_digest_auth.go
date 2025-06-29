@@ -40,6 +40,7 @@ type DigestAuth struct {
 	Timeout         int      `json:"timeout,omitempty"`         // Nonce timeout in seconds
 	RateLimitBurst  int      `json:"rate_limit_burst,omitempty"`  // Rate limiting burst
 	RateLimitWindow int      `json:"rate_limit_window,omitempty"` // Rate limiting window in seconds
+	EnableMetrics   bool     `json:"enable_metrics,omitempty"`    // Enable metrics collection
 
 	// Internal state
 	credentials map[string]credential
@@ -48,6 +49,7 @@ type DigestAuth struct {
 	salt        string
 	mutex       sync.RWMutex
 	logger      *zap.Logger
+	metrics     *Metrics
 }
 
 // User represents an inline user credential
@@ -77,6 +79,53 @@ type rateLimitData struct {
 	Attempts   int   `json:"attempts"`
 	FirstTry   int64 `json:"first_try"`
 	BlockedAt  int64 `json:"blocked_at"`
+}
+
+// Metrics tracks authentication statistics (optional)
+type Metrics struct {
+	TotalRequests     int64
+	SuccessfulAuths   int64
+	FailedAuths       int64
+	RateLimited       int64
+	ChallengesSent    int64
+	UserNotFound      int64
+	InvalidResponse   int64
+	StaleNonce        int64
+	RealmMismatch     int64
+	OpaqueMismatch    int64
+	mutex             sync.RWMutex
+}
+
+// IncrementMetric safely increments a metric counter
+func (m *Metrics) IncrementMetric(metric *int64) {
+	if m != nil {
+		m.mutex.Lock()
+		*metric++
+		m.mutex.Unlock()
+	}
+}
+
+// GetMetrics returns a copy of current metrics
+func (m *Metrics) GetMetrics() map[string]int64 {
+	if m == nil {
+		return nil
+	}
+	
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	
+	return map[string]int64{
+		"total_requests":      m.TotalRequests,
+		"successful_auths":    m.SuccessfulAuths,
+		"failed_auths":        m.FailedAuths,
+		"rate_limited":        m.RateLimited,
+		"challenges_sent":     m.ChallengesSent,
+		"user_not_found":      m.UserNotFound,
+		"invalid_response":    m.InvalidResponse,
+		"stale_nonce":         m.StaleNonce,
+		"realm_mismatch":      m.RealmMismatch,
+		"opaque_mismatch":     m.OpaqueMismatch,
+	}
 }
 
 // CaddyModule returns the Caddy module information
@@ -131,13 +180,20 @@ func (da *DigestAuth) Provision(ctx caddy.Context) error {
 	// Start cleanup goroutine
 	go da.cleanupRoutine()
 
+	// Initialize metrics if enabled
+	if da.EnableMetrics {
+		da.metrics = &Metrics{}
+		da.logger.Info("metrics collection enabled")
+	}
+
 	da.logger.Info("digest auth module provisioned",
 		zap.String("realm", da.Realm),
 		zap.Int("expires", da.Expires),
 		zap.Int("replays", da.Replays),
 		zap.Int("rate_limit_burst", da.RateLimitBurst),
 		zap.Int("rate_limit_window", da.RateLimitWindow),
-		zap.Int("exclude_paths", len(da.ExcludePaths)))
+		zap.Int("exclude_paths", len(da.ExcludePaths)),
+		zap.Bool("metrics_enabled", da.EnableMetrics))
 
 	return nil
 }
@@ -151,6 +207,9 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 		zap.String("remote_addr", r.RemoteAddr),
 	)
 
+	// Track total requests
+	da.metrics.IncrementMetric(&da.metrics.TotalRequests)
+
 	// Check if path should be excluded from authentication
 	if da.isPathExcluded(r.URL.Path) {
 		logger.Debug("path excluded from authentication")
@@ -159,6 +218,7 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 
 	// Check rate limiting
 	if da.isRateLimited(r.RemoteAddr) {
+		da.metrics.IncrementMetric(&da.metrics.RateLimited)
 		logger.Warn("client blocked by rate limiting",
 			zap.Int("status", http.StatusTooManyRequests))
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
@@ -168,6 +228,7 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	// Check for Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
+		da.metrics.IncrementMetric(&da.metrics.ChallengesSent)
 		logger.Debug("no authorization header, issuing challenge",
 			zap.Int("status", http.StatusUnauthorized))
 		return da.sendChallenge(w, false, logger)
@@ -176,6 +237,7 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	// Parse and validate the authorization header
 	ctx, err := da.parseAuthHeader(authHeader, r.Method)
 	if err != nil {
+		da.metrics.IncrementMetric(&da.metrics.FailedAuths)
 		logger.Warn("malformed authorization header",
 			zap.Error(err),
 			zap.Int("status", http.StatusBadRequest))
@@ -187,12 +249,14 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	// Verify the authentication
 	pass, stale := da.verify(ctx, r.RemoteAddr, logger)
 	if !pass {
+		da.metrics.IncrementMetric(&da.metrics.FailedAuths)
 		da.incrementRateLimit(r.RemoteAddr)
 		return da.sendChallenge(w, stale, logger)
 	}
 
 	// Authentication successful, reset rate limit
 	da.resetRateLimit(r.RemoteAddr)
+	da.metrics.IncrementMetric(&da.metrics.SuccessfulAuths)
 	
 	logger.Info("authentication successful",
 		zap.String("username", ctx.user),
@@ -455,8 +519,9 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 	cred, exists := da.credentials[ctx.user]
 	da.mutex.RUnlock()
 
-	if !exists || cred.Realm != ctx.realm {
-		logger.Warn("user not found or realm mismatch",
+	if !exists {
+		da.metrics.IncrementMetric(&da.metrics.UserNotFound)
+		logger.Warn("authentication failed: user not found",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
 			zap.String("realm", ctx.realm),
@@ -464,11 +529,23 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 			zap.Int("status", http.StatusUnauthorized))
 		return false, false
 	}
+	
+	if cred.Realm != ctx.realm {
+		da.metrics.IncrementMetric(&da.metrics.RealmMismatch)
+		logger.Warn("authentication failed: realm mismatch",
+			zap.String("remote_addr", remoteAddr),
+			zap.String("username", ctx.user),
+			zap.String("expected_realm", cred.Realm),
+			zap.String("provided_realm", ctx.realm),
+			zap.Int("status", http.StatusUnauthorized))
+		return false, false
+	}
 
 	// Validate nonce
 	stale, nonceData := da.validateNonce(ctx.nonce)
 	if stale {
-		logger.Warn("nonce is stale",
+		da.metrics.IncrementMetric(&da.metrics.StaleNonce)
+		logger.Warn("authentication failed: nonce is stale or invalid",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
 			zap.String("nonce", ctx.nonce),
@@ -478,7 +555,8 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 
 	// Validate opaque if present
 	if ctx.opaque != "" && nonceData != nil && ctx.opaque != nonceData.Opaque {
-		logger.Warn("opaque mismatch",
+		da.metrics.IncrementMetric(&da.metrics.OpaqueMismatch)
+		logger.Warn("authentication failed: opaque mismatch",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
 			zap.String("provided_opaque", ctx.opaque),
@@ -500,7 +578,8 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 	}
 
 	if expectedResponse != ctx.response {
-		logger.Warn("invalid response",
+		da.metrics.IncrementMetric(&da.metrics.InvalidResponse)
+		logger.Warn("authentication failed: invalid response hash",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
 			zap.String("method", ctx.method),
@@ -517,13 +596,26 @@ func (da *DigestAuth) validateNonce(nonce string) (bool, *nonceData) {
 	da.mutex.Lock()
 	defer da.mutex.Unlock()
 
+	// Reject weak nonces
+	if len(nonce) < 32 {
+		return true, nil
+	}
+
 	nonceData, exists := da.nonces[nonce]
 	if !exists {
 		return true, nil
 	}
 
+	now := time.Now().Unix()
+	
 	// Check expiration
-	if time.Now().Unix() > nonceData.ExpiresAt {
+	if now > nonceData.ExpiresAt {
+		delete(da.nonces, nonce)
+		return true, nonceData
+	}
+
+	// Check if nonce is too old (additional security check)
+	if now-nonceData.Timestamp > int64(da.Expires) {
 		delete(da.nonces, nonce)
 		return true, nonceData
 	}
@@ -628,6 +720,54 @@ func (da *DigestAuth) Validate() error {
 	if da.UserFile != "" && len(da.Users) > 0 {
 		return fmt.Errorf("cannot specify both inline users and user_file")
 	}
+	
+	// Security warnings
+	if da.Expires > 3600 {
+		da.logger.Warn("long nonce expiration may reduce security",
+			zap.Int("expires", da.Expires),
+			zap.String("recommendation", "use 300-600 seconds for better security"))
+	}
+	
+	if da.RateLimitBurst > 100 {
+		da.logger.Warn("high rate limit burst may allow abuse",
+			zap.Int("rate_limit_burst", da.RateLimitBurst),
+			zap.String("recommendation", "use 10-50 for better protection"))
+	}
+	
+	if da.RateLimitWindow < 60 {
+		da.logger.Warn("very short rate limit window may block legitimate users",
+			zap.Int("rate_limit_window", da.RateLimitWindow),
+			zap.String("recommendation", "use 300-600 seconds minimum"))
+	}
+	
+	if da.Replays > 1000 {
+		da.logger.Warn("high replay limit may reduce security",
+			zap.Int("replays", da.Replays),
+			zap.String("recommendation", "use 100-500 for better security"))
+	}
+	
+	// Validate user file exists if specified
+	if da.UserFile != "" {
+		if _, err := os.Stat(da.UserFile); os.IsNotExist(err) {
+			return fmt.Errorf("user file does not exist: %s", da.UserFile)
+		}
+	}
+	
+	// Validate inline users
+	for i, user := range da.Users {
+		if user.Username == "" {
+			return fmt.Errorf("inline user %d: username cannot be empty", i+1)
+		}
+		if user.Password == "" {
+			return fmt.Errorf("inline user %d: password cannot be empty", i+1)
+		}
+		if len(user.Password) < 8 {
+			da.logger.Warn("weak password detected",
+				zap.String("username", user.Username),
+				zap.String("recommendation", "use passwords with at least 8 characters"))
+		}
+	}
+	
 	return nil
 }
 

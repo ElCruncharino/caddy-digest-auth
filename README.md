@@ -137,6 +137,70 @@ htdigest users.htdigest "Protected Area" user1
 | `timeout` | int | Nonce timeout in seconds | 600 |
 | `rate_limit_burst` | int | Rate limiting burst | 50 |
 | `rate_limit_window` | int | Rate limiting window in seconds | 600 |
+| `enable_metrics` | bool | Enable metrics collection | false |
+
+## Security Features
+
+### Enhanced Security Validation
+The module includes comprehensive security validation and warnings:
+
+- **Nonce Security**: Rejects weak nonces (< 32 characters) and validates timestamps
+- **Configuration Warnings**: Warns about potentially insecure settings
+- **Password Strength**: Warns about weak passwords (< 8 characters)
+- **File Validation**: Validates user file existence before startup
+
+### Security Best Practices
+```caddy
+digest_auth {
+    realm "Secure Area"
+    user_file /etc/caddy/users.htdigest
+    expires 300        # 5 minutes (shorter = more secure)
+    replays 100        # Lower for high-security
+    rate_limit_burst 10
+    rate_limit_window 300
+    exclude_paths /health /metrics /public/*
+    enable_metrics true
+}
+```
+
+### Configuration Warnings
+The module will warn about:
+- Long nonce expiration (> 3600 seconds)
+- High rate limit burst (> 100)
+- Very short rate limit window (< 60 seconds)
+- High replay limit (> 1000)
+- Weak passwords (< 8 characters)
+
+## Metrics and Monitoring
+
+### Optional Metrics Collection
+Enable metrics to track authentication statistics:
+
+```caddy
+digest_auth {
+    # ... other config
+    enable_metrics true
+}
+```
+
+### Available Metrics
+When enabled, the module tracks:
+- `total_requests`: Total authentication requests
+- `successful_auths`: Successful authentications
+- `failed_auths`: Failed authentication attempts
+- `rate_limited`: Requests blocked by rate limiting
+- `challenges_sent`: Authentication challenges sent
+- `user_not_found`: User not found errors
+- `invalid_response`: Invalid response hash errors
+- `stale_nonce`: Stale/invalid nonce errors
+- `realm_mismatch`: Realm mismatch errors
+- `opaque_mismatch`: Opaque mismatch errors
+
+### Accessing Metrics
+Metrics are available through the module's internal state and can be exposed via:
+- Custom endpoints (if implemented)
+- Log analysis
+- Integration with monitoring systems
 
 ## User Management Approaches
 
@@ -247,6 +311,45 @@ example.com {
     }
 }
 ```
+
+## Troubleshooting
+
+### Common Issues
+
+#### "User not found" vs "Invalid credentials"
+- **User not found**: The username doesn't exist in your user file/database
+- **Invalid credentials**: The username exists but the password/realm is incorrect
+- **Realm mismatch**: The user exists but in a different realm
+
+#### Rate Limiting Issues
+- **Too many 429 responses**: Increase `rate_limit_burst` or `rate_limit_window`
+- **Legitimate users blocked**: Check if users are sharing IP addresses (NAT)
+
+#### Nonce Expiration Issues
+- **Frequent "stale nonce" errors**: Increase `expires` value
+- **Security concerns**: Balance between security (shorter expiry) and usability
+
+#### Performance Issues
+- **High memory usage**: Monitor nonce cleanup frequency
+- **Slow authentication**: Use JSON user files for large user bases
+- **File parsing errors**: Check user file format and permissions
+
+### Debug Logging
+Enable debug logging to troubleshoot authentication issues:
+
+```caddy
+log {
+    level DEBUG
+    output stdout
+}
+```
+
+### Security Recommendations
+1. **Use strong passwords** (8+ characters)
+2. **Keep nonce expiration short** (300-600 seconds)
+3. **Monitor rate limiting** for abuse detection
+4. **Regular user file audits** for unused accounts
+5. **Use HTTPS** to protect authentication credentials
 
 ## Security Considerations
 

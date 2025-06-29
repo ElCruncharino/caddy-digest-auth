@@ -12,6 +12,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive documentation
 - Security policy and contributing guidelines
 
+## [1.1.0] - 2025-06-29
+
+### Added
+- **Enhanced Security Validation**: Configuration warnings for potentially insecure settings
+- **Nonce Security Hardening**: Rejects weak nonces and validates timestamps
+- **Optional Metrics Collection**: Track authentication statistics and failures
+- **Better Error Messages**: More descriptive authentication failure messages
+- **Password Strength Warnings**: Warns about weak passwords (< 8 characters)
+- **File Validation**: Validates user file existence before startup
+- **Comprehensive Troubleshooting Guide**: Common issues and solutions
+
+### Changed
+- **Improved Logging**: All authentication responses now include HTTP status codes
+- **Enhanced Configuration Validation**: More thorough validation with security warnings
+- **Better Documentation**: Added security best practices and troubleshooting sections
+
+### Security Improvements
+- Nonce entropy validation (minimum 32 characters)
+- Stricter timestamp validation for nonces
+- Configuration warnings for long expiration times
+- Rate limiting parameter validation
+- User file existence validation
+
+### New Configuration Options
+- `enable_metrics`: Enable optional metrics collection (default: false)
+
+### Metrics Available (when enabled)
+- Total requests, successful/failed authentications
+- Rate limiting events, challenges sent
+- Detailed failure tracking (user not found, invalid response, etc.)
+
 ## [1.0.1] - 2025-06-29
 
 ### Changed
