@@ -168,7 +168,8 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	// Check for Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		logger.Debug("no authorization header, issuing challenge")
+		logger.Debug("no authorization header, issuing challenge",
+			zap.Int("status", http.StatusUnauthorized))
 		return da.sendChallenge(w, false, logger)
 	}
 
@@ -194,7 +195,8 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	da.resetRateLimit(r.RemoteAddr)
 	
 	logger.Info("authentication successful",
-		zap.String("username", ctx.user))
+		zap.String("username", ctx.user),
+		zap.Int("status", http.StatusOK))
 
 	// Continue to next handler
 	return next.ServeHTTP(w, r)
@@ -458,7 +460,8 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
 			zap.String("realm", ctx.realm),
-			zap.Bool("user_exists", exists))
+			zap.Bool("user_exists", exists),
+			zap.Int("status", http.StatusUnauthorized))
 		return false, false
 	}
 
@@ -468,7 +471,8 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 		logger.Warn("nonce is stale",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
-			zap.String("nonce", ctx.nonce))
+			zap.String("nonce", ctx.nonce),
+			zap.Int("status", http.StatusUnauthorized))
 		return false, true
 	}
 
@@ -478,7 +482,8 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
 			zap.String("provided_opaque", ctx.opaque),
-			zap.String("expected_opaque", nonceData.Opaque))
+			zap.String("expected_opaque", nonceData.Opaque),
+			zap.Int("status", http.StatusUnauthorized))
 		return false, false
 	}
 
@@ -499,7 +504,8 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
 			zap.String("method", ctx.method),
-			zap.String("uri", ctx.uri))
+			zap.String("uri", ctx.uri),
+			zap.Int("status", http.StatusUnauthorized))
 		return false, false
 	}
 
