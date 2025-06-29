@@ -1,12 +1,17 @@
 package caddy_digest_auth
 
 import (
+	"os"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
 )
 
 func TestDigestAuthValidation(t *testing.T) {
+	tmpUserFile := "test_users.json"
+	os.WriteFile(tmpUserFile, []byte(`[{"username":"admin","password":"password"}]`), 0600)
+	defer os.Remove(tmpUserFile)
+
 	tests := []struct {
 		name    string
 		config  DigestAuth
@@ -24,7 +29,7 @@ func TestDigestAuthValidation(t *testing.T) {
 		{
 			name: "valid user file",
 			config: DigestAuth{
-				UserFile: "/etc/caddy/users.json",
+				UserFile: tmpUserFile,
 			},
 			wantErr: false,
 		},
@@ -39,7 +44,7 @@ func TestDigestAuthValidation(t *testing.T) {
 				Users: []User{
 					{Username: "admin", Password: "password"},
 				},
-				UserFile: "/etc/caddy/users.json",
+				UserFile: tmpUserFile,
 			},
 			wantErr: true,
 		},
