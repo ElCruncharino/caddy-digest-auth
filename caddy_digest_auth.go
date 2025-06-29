@@ -200,12 +200,17 @@ func (da *DigestAuth) Provision(ctx caddy.Context) error {
 
 // ServeHTTP handles the HTTP request
 func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	// Get request-scoped logger
-	logger := da.logger.With(
-		zap.String("method", r.Method),
-		zap.String("uri", r.URL.Path),
-		zap.String("remote_addr", r.RemoteAddr),
-	)
+	// Get request-scoped logger, fallback to zap.NewNop() if da.logger is nil
+	var logger *zap.Logger
+	if da.logger != nil {
+		logger = da.logger.With(
+			zap.String("method", r.Method),
+			zap.String("uri", r.URL.Path),
+			zap.String("remote_addr", r.RemoteAddr),
+		)
+	} else {
+		logger = zap.NewNop()
+	}
 
 	// Track total requests
 	if da.metrics != nil {
