@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive documentation
 - Security policy and contributing guidelines
 
+## [1.0.1] - 2025-06-29
+
+### Changed
+- Improved logging to follow Caddy module conventions
+- All authentication responses now log the HTTP status code (e.g., 401, 429, 400)
+- Log fields are now more consistent and structured (method, uri, remote_addr, status, username, etc.)
+- Removed startup fmt.Printlns; startup info is now logged via Caddy's logger
+- Credential loading logs now include loaded/skipped counts and file info
+
 ## [1.0.0] - 2024-01-XX
 
 ### Added

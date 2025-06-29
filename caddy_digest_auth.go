@@ -24,10 +24,8 @@ var rugCleanup sync.Once
 // stranger: sometimes there's a logger, well, he's the logger for his time and place (unused)
 
 func init() {
-	fmt.Println("Loading Caddy Digest Auth module...")
 	caddy.RegisterModule(DigestAuth{})
 	httpcaddyfile.RegisterHandlerDirective("digest_auth", parseCaddyfileDigestAuth)
-	fmt.Println("Caddy Digest Auth module registered with ID: http.handlers.digest_auth")
 }
 
 // DigestAuth implements HTTP Digest Authentication for Caddy
@@ -133,25 +131,36 @@ func (da *DigestAuth) Provision(ctx caddy.Context) error {
 	// Start cleanup goroutine
 	go da.cleanupRoutine()
 
+	da.logger.Info("digest auth module provisioned",
+		zap.String("realm", da.Realm),
+		zap.Int("expires", da.Expires),
+		zap.Int("replays", da.Replays),
+		zap.Int("rate_limit_burst", da.RateLimitBurst),
+		zap.Int("rate_limit_window", da.RateLimitWindow),
+		zap.Int("exclude_paths", len(da.ExcludePaths)))
+
 	return nil
 }
 
 // ServeHTTP handles the HTTP request
 func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	remoteAddr := r.RemoteAddr
+	// Get request-scoped logger
+	logger := da.logger.With(
+		zap.String("method", r.Method),
+		zap.String("uri", r.URL.Path),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
 
 	// Check if path should be excluded from authentication
 	if da.isPathExcluded(r.URL.Path) {
-		da.logger.Debug("path excluded from authentication",
-			zap.String("remote_addr", remoteAddr),
-			zap.String("path", r.URL.Path))
+		logger.Debug("path excluded from authentication")
 		return next.ServeHTTP(w, r)
 	}
 
 	// Check rate limiting
-	if da.isRateLimited(remoteAddr) {
-		da.logger.Warn("client blocked by rate limiting",
-			zap.String("remote_addr", remoteAddr))
+	if da.isRateLimited(r.RemoteAddr) {
+		logger.Warn("client blocked by rate limiting",
+			zap.Int("status", http.StatusTooManyRequests))
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return nil
 	}
@@ -159,34 +168,32 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	// Check for Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		da.logger.Debug("no authorization header, issuing challenge",
-			zap.String("remote_addr", remoteAddr))
-		return da.sendChallenge(w, false)
+		logger.Debug("no authorization header, issuing challenge")
+		return da.sendChallenge(w, false, logger)
 	}
 
 	// Parse and validate the authorization header
 	ctx, err := da.parseAuthHeader(authHeader, r.Method)
 	if err != nil {
-		da.logger.Warn("malformed authorization header",
-			zap.String("remote_addr", remoteAddr),
-			zap.Error(err))
-		da.incrementRateLimit(remoteAddr)
+		logger.Warn("malformed authorization header",
+			zap.Error(err),
+			zap.Int("status", http.StatusBadRequest))
+		da.incrementRateLimit(r.RemoteAddr)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return nil
 	}
 
 	// Verify the authentication
-	pass, stale := da.verify(ctx, remoteAddr)
+	pass, stale := da.verify(ctx, r.RemoteAddr, logger)
 	if !pass {
-		da.incrementRateLimit(remoteAddr)
-		return da.sendChallenge(w, stale)
+		da.incrementRateLimit(r.RemoteAddr)
+		return da.sendChallenge(w, stale, logger)
 	}
 
 	// Authentication successful, reset rate limit
-	da.resetRateLimit(remoteAddr)
+	da.resetRateLimit(r.RemoteAddr)
 	
-	da.logger.Info("authentication successful",
-		zap.String("remote_addr", remoteAddr),
+	logger.Info("authentication successful",
 		zap.String("username", ctx.user))
 
 	// Continue to next handler
@@ -213,7 +220,9 @@ func (da *DigestAuth) loadCredentials() error {
 				Cipher: ha1,
 			}
 		}
-		da.logger.Info("loaded inline credentials", zap.Int("count", len(da.Users)))
+		da.logger.Info("loaded inline credentials", 
+			zap.Int("count", len(da.Users)),
+			zap.String("realm", da.Realm))
 		return nil
 	}
 
@@ -228,6 +237,8 @@ func (da *DigestAuth) loadCredentials() error {
 
 		scanner := bufio.NewScanner(file)
 		lineNum := 0
+		loadedCount := 0
+		skippedCount := 0
 		
 		for scanner.Scan() {
 			lineNum++
@@ -241,7 +252,11 @@ func (da *DigestAuth) loadCredentials() error {
 			// Parse htdigest format: username:realm:md5hash
 			parts := strings.Split(line, ":")
 			if len(parts) != 3 {
-				da.logger.Warn("invalid htdigest format", zap.Int("line", lineNum), zap.String("line", line))
+				da.logger.Warn("invalid htdigest format", 
+					zap.Int("line", lineNum), 
+					zap.String("line", line),
+					zap.String("file", da.UserFile))
+				skippedCount++
 				continue
 			}
 			
@@ -254,7 +269,9 @@ func (da *DigestAuth) loadCredentials() error {
 				da.logger.Warn("realm mismatch", 
 					zap.String("username", username),
 					zap.String("expected_realm", da.Realm),
-					zap.String("file_realm", realm))
+					zap.String("file_realm", realm),
+					zap.String("file", da.UserFile))
+				skippedCount++
 				continue
 			}
 			
@@ -262,17 +279,23 @@ func (da *DigestAuth) loadCredentials() error {
 				Realm:  realm,
 				Cipher: md5hash,
 			}
+			loadedCount++
 		}
 		
 		if err := scanner.Err(); err != nil {
 			return fmt.Errorf("error reading user file: %v", err)
 		}
 		
-		da.logger.Info("loaded credentials from file", zap.Int("count", len(da.credentials)))
+		da.logger.Info("loaded credentials from file",
+			zap.String("file", da.UserFile),
+			zap.Int("loaded", loadedCount),
+			zap.Int("skipped", skippedCount),
+			zap.String("realm", da.Realm))
+		
 		return nil
 	}
 
-	return fmt.Errorf("either user_file or users must be specified")
+	return fmt.Errorf("no credentials configured")
 }
 
 // generateNonce creates a new nonce with all required components
@@ -318,10 +341,12 @@ func (da *DigestAuth) generateNonce() (string, *nonceData, error) {
 }
 
 // sendChallenge sends a WWW-Authenticate header with digest challenge
-func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool) error {
+func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool, logger *zap.Logger) error {
 	nonce, nonceData, err := da.generateNonce()
 	if err != nil {
-		da.logger.Error("failed to generate nonce", zap.Error(err))
+		logger.Error("failed to generate nonce", 
+			zap.Error(err),
+			zap.Int("status", http.StatusInternalServerError))
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return nil
 	}
@@ -334,7 +359,13 @@ func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool) error {
 	}
 
 	w.Header().Set("WWW-Authenticate", challenge)
-	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	
+	status := http.StatusUnauthorized
+	logger.Info("authentication challenge sent",
+		zap.Int("status", status),
+		zap.Bool("stale", stale))
+	
+	http.Error(w, "Unauthorized", status)
 	return nil
 }
 
@@ -417,32 +448,37 @@ type authContext struct {
 }
 
 // verify validates the authentication response
-func (da *DigestAuth) verify(ctx *authContext, remoteAddr string) (bool, bool) {
+func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Logger) (bool, bool) {
 	da.mutex.RLock()
 	cred, exists := da.credentials[ctx.user]
 	da.mutex.RUnlock()
 
 	if !exists || cred.Realm != ctx.realm {
-		da.logger.Warn("user not found or realm mismatch",
+		logger.Warn("user not found or realm mismatch",
 			zap.String("remote_addr", remoteAddr),
-			zap.String("user", ctx.user))
+			zap.String("username", ctx.user),
+			zap.String("realm", ctx.realm),
+			zap.Bool("user_exists", exists))
 		return false, false
 	}
 
 	// Validate nonce
 	stale, nonceData := da.validateNonce(ctx.nonce)
 	if stale {
-		da.logger.Warn("nonce is stale",
+		logger.Warn("nonce is stale",
 			zap.String("remote_addr", remoteAddr),
-			zap.String("user", ctx.user))
+			zap.String("username", ctx.user),
+			zap.String("nonce", ctx.nonce))
 		return false, true
 	}
 
 	// Validate opaque if present
 	if ctx.opaque != "" && nonceData != nil && ctx.opaque != nonceData.Opaque {
-		da.logger.Warn("opaque mismatch",
+		logger.Warn("opaque mismatch",
 			zap.String("remote_addr", remoteAddr),
-			zap.String("user", ctx.user))
+			zap.String("username", ctx.user),
+			zap.String("provided_opaque", ctx.opaque),
+			zap.String("expected_opaque", nonceData.Opaque))
 		return false, false
 	}
 
@@ -459,9 +495,11 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string) (bool, bool) {
 	}
 
 	if expectedResponse != ctx.response {
-		da.logger.Warn("invalid response",
+		logger.Warn("invalid response",
 			zap.String("remote_addr", remoteAddr),
-			zap.String("user", ctx.user))
+			zap.String("username", ctx.user),
+			zap.String("method", ctx.method),
+			zap.String("uri", ctx.uri))
 		return false, false
 	}
 
