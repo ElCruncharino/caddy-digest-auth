@@ -277,18 +277,18 @@ func (da *DigestAuth) loadCredentials() error {
 			if user.Username == "" || user.Password == "" {
 				return fmt.Errorf("username and password are required for inline users")
 			}
-			
 			// Calculate MD5 hash: username:realm:password
 			ha1 := da.md5Hash(fmt.Sprintf("%s:%s:%s", user.Username, da.Realm, user.Password))
-			
 			da.credentials[user.Username] = credential{
 				Realm:  da.Realm,
 				Cipher: ha1,
 			}
 		}
-		da.logger.Info("loaded inline credentials", 
-			zap.Int("count", len(da.Users)),
-			zap.String("realm", da.Realm))
+		if da.logger != nil {
+			da.logger.Info("loaded inline credentials", 
+				zap.Int("count", len(da.Users)),
+				zap.String("realm", da.Realm))
+		}
 		return nil
 	}
 
@@ -309,55 +309,53 @@ func (da *DigestAuth) loadCredentials() error {
 		for scanner.Scan() {
 			lineNum++
 			line := strings.TrimSpace(scanner.Text())
-			
 			// Skip empty lines and comments
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			
 			// Parse htdigest format: username:realm:md5hash
 			parts := strings.Split(line, ":")
 			if len(parts) != 3 {
-				da.logger.Warn("invalid htdigest format", 
-					zap.Int("line", lineNum), 
-					zap.String("line", line),
-					zap.String("file", da.UserFile))
+				if da.logger != nil {
+					da.logger.Warn("invalid htdigest format", 
+						zap.Int("line", lineNum), 
+						zap.String("line", line),
+						zap.String("file", da.UserFile))
+				}
 				skippedCount++
 				continue
 			}
-			
 			username := parts[0]
 			realm := parts[1]
 			md5hash := parts[2]
-			
 			// Validate realm matches
 			if realm != da.Realm {
-				da.logger.Warn("realm mismatch", 
-					zap.String("username", username),
-					zap.String("expected_realm", da.Realm),
-					zap.String("file_realm", realm),
-					zap.String("file", da.UserFile))
+				if da.logger != nil {
+					da.logger.Warn("realm mismatch", 
+						zap.String("username", username),
+						zap.String("expected_realm", da.Realm),
+						zap.String("file_realm", realm),
+						zap.String("file", da.UserFile))
+				}
 				skippedCount++
 				continue
 			}
-			
 			da.credentials[username] = credential{
 				Realm:  realm,
 				Cipher: md5hash,
 			}
 			loadedCount++
 		}
-		
 		if err := scanner.Err(); err != nil {
 			return fmt.Errorf("error reading user file: %v", err)
 		}
-		
-		da.logger.Info("loaded credentials from file",
-			zap.String("file", da.UserFile),
-			zap.Int("loaded", loadedCount),
-			zap.Int("skipped", skippedCount),
-			zap.String("realm", da.Realm))
-		
+		if da.logger != nil {
+			da.logger.Info("loaded credentials from file",
+				zap.String("file", da.UserFile),
+				zap.Int("loaded", loadedCount),
+				zap.Int("skipped", skippedCount),
+				zap.String("realm", da.Realm))
+		}
 		return nil
 	}
 
@@ -720,39 +718,41 @@ func (da *DigestAuth) Validate() error {
 	if da.UserFile != "" && len(da.Users) > 0 {
 		return fmt.Errorf("cannot specify both inline users and user_file")
 	}
-	
 	// Security warnings
 	if da.Expires > 3600 {
-		da.logger.Warn("long nonce expiration may reduce security",
-			zap.Int("expires", da.Expires),
-			zap.String("recommendation", "use 300-600 seconds for better security"))
+		if da.logger != nil {
+			da.logger.Warn("long nonce expiration may reduce security",
+				zap.Int("expires", da.Expires),
+				zap.String("recommendation", "use 300-600 seconds for better security"))
+		}
 	}
-	
 	if da.RateLimitBurst > 100 {
-		da.logger.Warn("high rate limit burst may allow abuse",
-			zap.Int("rate_limit_burst", da.RateLimitBurst),
-			zap.String("recommendation", "use 10-50 for better protection"))
+		if da.logger != nil {
+			da.logger.Warn("high rate limit burst may allow abuse",
+				zap.Int("rate_limit_burst", da.RateLimitBurst),
+				zap.String("recommendation", "use 10-50 for better protection"))
+		}
 	}
-	
 	if da.RateLimitWindow < 60 {
-		da.logger.Warn("very short rate limit window may block legitimate users",
-			zap.Int("rate_limit_window", da.RateLimitWindow),
-			zap.String("recommendation", "use 300-600 seconds minimum"))
+		if da.logger != nil {
+			da.logger.Warn("very short rate limit window may block legitimate users",
+				zap.Int("rate_limit_window", da.RateLimitWindow),
+				zap.String("recommendation", "use 300-600 seconds minimum"))
+		}
 	}
-	
 	if da.Replays > 1000 {
-		da.logger.Warn("high replay limit may reduce security",
-			zap.Int("replays", da.Replays),
-			zap.String("recommendation", "use 100-500 for better security"))
+		if da.logger != nil {
+			da.logger.Warn("high replay limit may reduce security",
+				zap.Int("replays", da.Replays),
+				zap.String("recommendation", "use 100-500 for better security"))
+		}
 	}
-	
 	// Validate user file exists if specified
 	if da.UserFile != "" {
 		if _, err := os.Stat(da.UserFile); os.IsNotExist(err) {
 			return fmt.Errorf("user file does not exist: %s", da.UserFile)
 		}
 	}
-	
 	// Validate inline users
 	for i, user := range da.Users {
 		if user.Username == "" {
@@ -762,12 +762,13 @@ func (da *DigestAuth) Validate() error {
 			return fmt.Errorf("inline user %d: password cannot be empty", i+1)
 		}
 		if len(user.Password) < 8 {
-			da.logger.Warn("weak password detected",
-				zap.String("username", user.Username),
-				zap.String("recommendation", "use passwords with at least 8 characters"))
+			if da.logger != nil {
+				da.logger.Warn("weak password detected",
+					zap.String("username", user.Username),
+					zap.String("recommendation", "use passwords with at least 8 characters"))
+			}
 		}
 	}
-	
 	return nil
 }
 
