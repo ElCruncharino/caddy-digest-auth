@@ -1,0 +1,40 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":80"],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "digest_auth",
+                  "realm": "Protected Area",
+                  "users": [
+                    {
+                      "username": "admin",
+                      "password": "admin123"
+                    },
+                    {
+                      "username": "user",
+                      "password": "user123"
+                    }
+                  ],
+                  "exclude_paths": ["/public/*", "/health", "/metrics"]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "localhost:8080"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+} 

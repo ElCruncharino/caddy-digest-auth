@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [1.21, 1.22]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go ${{ matrix.go-version }}
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Install xcaddy
+      run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Run tests
+      run: go test -v ./...
+
+    - name: Build Caddy with module
+      run: xcaddy build --with ./
+
+    - name: Test module integration
+      run: |
+        ./caddy version
+        ./caddy list-modules | grep digest_auth
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.22'
+
+    - name: Install xcaddy
+      run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+    - name: Build for multiple platforms
+      run: |
+        mkdir -p dist
+        xcaddy build --with ./ --output dist/caddy-linux-amd64
+        xcaddy build --with ./ --output dist/caddy-windows-amd64.exe
+        xcaddy build --with ./ --output dist/caddy-darwin-amd64
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: caddy-binaries
+        path: dist/ 
