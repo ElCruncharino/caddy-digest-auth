@@ -31,7 +31,7 @@ jobs:
       run: go test -v ./...
 
     - name: Build Caddy with module
-      run: xcaddy build --with ./
+      run: xcaddy build --with github.com/ElCruncharino/caddy-digest-auth
 
     - name: Test module integration
       run: |
@@ -57,9 +57,9 @@ jobs:
     - name: Build for multiple platforms
       run: |
         mkdir -p dist
-        xcaddy build --with ./ --output dist/caddy-linux-amd64
-        xcaddy build --with ./ --output dist/caddy-windows-amd64.exe
-        xcaddy build --with ./ --output dist/caddy-darwin-amd64
+        xcaddy build --with github.com/ElCruncharino/caddy-digest-auth --output dist/caddy-linux-amd64
+        xcaddy build --with github.com/ElCruncharino/caddy-digest-auth --output dist/caddy-windows-amd64.exe
+        xcaddy build --with github.com/ElCruncharino/caddy-digest-auth --output dist/caddy-darwin-amd64
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
