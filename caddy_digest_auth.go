@@ -208,7 +208,9 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	)
 
 	// Track total requests
-	da.metrics.IncrementMetric(&da.metrics.TotalRequests)
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.TotalRequests)
+	}
 
 	// Check if path should be excluded from authentication
 	if da.isPathExcluded(r.URL.Path) {
@@ -218,7 +220,9 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 
 	// Check rate limiting
 	if da.isRateLimited(r.RemoteAddr) {
-		da.metrics.IncrementMetric(&da.metrics.RateLimited)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.RateLimited)
+		}
 		logger.Warn("client blocked by rate limiting",
 			zap.Int("status", http.StatusTooManyRequests))
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
@@ -228,7 +232,9 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	// Check for Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		da.metrics.IncrementMetric(&da.metrics.ChallengesSent)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.ChallengesSent)
+		}
 		logger.Debug("no authorization header, issuing challenge",
 			zap.Int("status", http.StatusUnauthorized))
 		return da.sendChallenge(w, false, logger)
@@ -237,7 +243,9 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	// Parse and validate the authorization header
 	ctx, err := da.parseAuthHeader(authHeader, r.Method)
 	if err != nil {
-		da.metrics.IncrementMetric(&da.metrics.FailedAuths)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.FailedAuths)
+		}
 		logger.Warn("malformed authorization header",
 			zap.Error(err),
 			zap.Int("status", http.StatusBadRequest))
@@ -249,14 +257,18 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 	// Verify the authentication
 	pass, stale := da.verify(ctx, r.RemoteAddr, logger)
 	if !pass {
-		da.metrics.IncrementMetric(&da.metrics.FailedAuths)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.FailedAuths)
+		}
 		da.incrementRateLimit(r.RemoteAddr)
 		return da.sendChallenge(w, stale, logger)
 	}
 
 	// Authentication successful, reset rate limit
 	da.resetRateLimit(r.RemoteAddr)
-	da.metrics.IncrementMetric(&da.metrics.SuccessfulAuths)
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.SuccessfulAuths)
+	}
 	
 	logger.Info("authentication successful",
 		zap.String("username", ctx.user),
@@ -518,7 +530,9 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 	da.mutex.RUnlock()
 
 	if !exists {
-		da.metrics.IncrementMetric(&da.metrics.UserNotFound)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.UserNotFound)
+		}
 		logger.Warn("authentication failed: user not found",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
@@ -529,7 +543,9 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 	}
 	
 	if cred.Realm != ctx.realm {
-		da.metrics.IncrementMetric(&da.metrics.RealmMismatch)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.RealmMismatch)
+		}
 		logger.Warn("authentication failed: realm mismatch",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
@@ -542,7 +558,9 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 	// Validate nonce
 	stale, nonceData := da.validateNonce(ctx.nonce)
 	if stale {
-		da.metrics.IncrementMetric(&da.metrics.StaleNonce)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.StaleNonce)
+		}
 		logger.Warn("authentication failed: nonce is stale or invalid",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
@@ -553,7 +571,9 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 
 	// Validate opaque if present
 	if ctx.opaque != "" && nonceData != nil && ctx.opaque != nonceData.Opaque {
-		da.metrics.IncrementMetric(&da.metrics.OpaqueMismatch)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.OpaqueMismatch)
+		}
 		logger.Warn("authentication failed: opaque mismatch",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
@@ -576,7 +596,9 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 	}
 
 	if expectedResponse != ctx.response {
-		da.metrics.IncrementMetric(&da.metrics.InvalidResponse)
+		if da.metrics != nil {
+			da.metrics.IncrementMetric(&da.metrics.InvalidResponse)
+		}
 		logger.Warn("authentication failed: invalid response hash",
 			zap.String("remote_addr", remoteAddr),
 			zap.String("username", ctx.user),
