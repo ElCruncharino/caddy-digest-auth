@@ -1,5 +1,6 @@
 # Caddy Digest Authentication Module
 
+[![Codacy Badge](https://api.codacy.com/project/badge/Grade/18a51c3abbbd4da392bd180dadc41a47)](https://app.codacy.com/gh/ElCruncharino/caddy-digest-auth?utm_source=github.com&utm_medium=referral&utm_content=ElCruncharino/caddy-digest-auth&utm_campaign=Badge_Grade)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ElCruncharino/caddy-digest-auth)](https://goreportcard.com/report/github.com/ElCruncharino/caddy-digest-auth)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/ElCruncharino/caddy-digest-auth)](https://go.dev/)
 [![License](https://img.shields.io/github/license/ElCruncharino/caddy-digest-auth)](https://github.com/ElCruncharino/caddy-digest-auth/blob/main/LICENSE)
