@@ -19,28 +19,43 @@ func (da *DigestAuth) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 }
 
 func (da *DigestAuth) parseCaddyfileBlock(d *caddyfile.Dispenser) error {
-	switch d.Val() {
-	case "realm":
-		return da.handleRealmDirective(d)
-	case "user_file":
-		return da.handleUserFileDirective(d)
-	case "users":
-		return da.handleUsersDirective(d)
-	case "exclude_paths":
-		return da.handleExcludePathsDirective(d)
-	case "expires":
-		return da.handleIntDirective(d, &da.Expires)
-	case "replays":
-		return da.handleIntDirective(d, &da.Replays)
-	case "timeout":
-		return da.handleIntDirective(d, &da.Timeout)
-	case "rate_limit_burst":
-		return da.handleIntDirective(d, &da.RateLimitBurst)
-	case "rate_limit_window":
-		return da.handleIntDirective(d, &da.RateLimitWindow)
-	default:
+	handlers := map[string]func(*caddyfile.Dispenser) error{
+		"realm":            da.handleRealmDirective,
+		"user_file":        da.handleUserFileDirective,
+		"users":            da.handleUsersDirective,
+		"exclude_paths":    da.handleExcludePathsDirective,
+		"expires":          da.handleExpiresDirective,
+		"replays":          da.handleReplaysDirective,
+		"timeout":          da.handleTimeoutDirective,
+		"rate_limit_burst": da.handleRateLimitBurstDirective,
+		"rate_limit_window":da.handleRateLimitWindowDirective,
+	}
+
+	handler, exists := handlers[d.Val()]
+	if !exists {
 		return d.Errf("unknown subdirective: %s", d.Val())
 	}
+	return handler(d)
+}
+
+func (da *DigestAuth) handleExpiresDirective(d *caddyfile.Dispenser) error {
+	return da.handleIntDirective(d, &da.Expires)
+}
+
+func (da *DigestAuth) handleReplaysDirective(d *caddyfile.Dispenser) error {
+	return da.handleIntDirective(d, &da.Replays)
+}
+
+func (da *DigestAuth) handleTimeoutDirective(d *caddyfile.Dispenser) error {
+	return da.handleIntDirective(d, &da.Timeout)
+}
+
+func (da *DigestAuth) handleRateLimitBurstDirective(d *caddyfile.Dispenser) error {
+	return da.handleIntDirective(d, &da.RateLimitBurst)
+}
+
+func (da *DigestAuth) handleRateLimitWindowDirective(d *caddyfile.Dispenser) error {
+	return da.handleIntDirective(d, &da.RateLimitWindow)
 }
 
 func (da *DigestAuth) handleRealmDirective(d *caddyfile.Dispenser) error {
