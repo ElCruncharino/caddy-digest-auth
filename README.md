@@ -4,6 +4,7 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/ElCruncharino/caddy-digest-auth)](https://go.dev/)
 [![License](https://img.shields.io/github/license/ElCruncharino/caddy-digest-auth)](https://github.com/ElCruncharino/caddy-digest-auth/blob/main/LICENSE)
 [![CI](https://github.com/ElCruncharino/caddy-digest-auth/workflows/CI/badge.svg)](https://github.com/ElCruncharino/caddy-digest-auth/actions)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/25249835d31149a8b0ddf72448b52147)](https://app.codacy.com/gh/ElCruncharino/caddy-digest-auth/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 A custom Caddy v2 module that provides HTTP Digest Authentication support for Caddy servers.
 
