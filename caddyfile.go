@@ -9,100 +9,91 @@ import (
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler interface
 func (da *DigestAuth) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
-		// Parse the digest_auth directive
 		for d.NextBlock(0) {
-			switch d.Val() {
-			case "realm":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				da.Realm = d.Val()
-
-			case "user_file":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				da.UserFile = d.Val()
-
-			case "users":
-				// Parse inline users: users username1 password1 username2 password2
-				args := d.RemainingArgs()
-				if len(args) == 0 {
-					return d.ArgErr()
-				}
-				if len(args)%2 != 0 {
-					return d.Errf("users must have even number of arguments (username password pairs)")
-				}
-				
-				for i := 0; i < len(args); i += 2 {
-					da.Users = append(da.Users, User{
-						Username: args[i],
-						Password: args[i+1],
-					})
-				}
-
-			case "exclude_paths":
-				da.ExcludePaths = d.RemainingArgs()
-				if len(da.ExcludePaths) == 0 {
-					return d.ArgErr()
-				}
-
-			case "expires":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				val, err := strconv.Atoi(d.Val())
-				if err != nil {
-					return d.Errf("invalid expires value: %v", err)
-				}
-				da.Expires = val
-
-			case "replays":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				val, err := strconv.Atoi(d.Val())
-				if err != nil {
-					return d.Errf("invalid replays value: %v", err)
-				}
-				da.Replays = val
-
-			case "timeout":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				val, err := strconv.Atoi(d.Val())
-				if err != nil {
-					return d.Errf("invalid timeout value: %v", err)
-				}
-				da.Timeout = val
-
-			case "rate_limit_burst":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				val, err := strconv.Atoi(d.Val())
-				if err != nil {
-					return d.Errf("invalid rate_limit_burst value: %v", err)
-				}
-				da.RateLimitBurst = val
-
-			case "rate_limit_window":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				val, err := strconv.Atoi(d.Val())
-				if err != nil {
-					return d.Errf("invalid rate_limit_window value: %v", err)
-				}
-				da.RateLimitWindow = val
-
-			default:
-				return d.Errf("unknown subdirective: %s", d.Val())
+			if err := da.parseCaddyfileBlock(d); err != nil {
+				return err
 			}
 		}
 	}
+	return nil
+}
 
+func (da *DigestAuth) parseCaddyfileBlock(d *caddyfile.Dispenser) error {
+	switch d.Val() {
+	case "realm":
+		return da.handleRealmDirective(d)
+	case "user_file":
+		return da.handleUserFileDirective(d)
+	case "users":
+		return da.handleUsersDirective(d)
+	case "exclude_paths":
+		return da.handleExcludePathsDirective(d)
+	case "expires":
+		return da.handleIntDirective(d, &da.Expires)
+	case "replays":
+		return da.handleIntDirective(d, &da.Replays)
+	case "timeout":
+		return da.handleIntDirective(d, &da.Timeout)
+	case "rate_limit_burst":
+		return da.handleIntDirective(d, &da.RateLimitBurst)
+	case "rate_limit_window":
+		return da.handleIntDirective(d, &da.RateLimitWindow)
+	default:
+		return d.Errf("unknown subdirective: %s", d.Val())
+	}
+}
+
+func (da *DigestAuth) handleRealmDirective(d *caddyfile.Dispenser) error {
+	if !d.NextArg() {
+		return d.ArgErr()
+	}
+	da.Realm = d.Val()
+	return nil
+}
+
+func (da *DigestAuth) handleUserFileDirective(d *caddyfile.Dispenser) error {
+	if !d.NextArg() {
+		return d.ArgErr()
+	}
+	da.UserFile = d.Val()
+	return nil
+}
+
+func (da *DigestAuth) handleUsersDirective(d *caddyfile.Dispenser) error {
+	args := d.RemainingArgs()
+	if len(args) == 0 {
+		return d.ArgErr()
+	}
+	if len(args)%2 != 0 {
+		return d.Errf("users must have even number of arguments (username password pairs)")
+	}
+	
+	for i := 0; i < len(args); i += 2 {
+		da.Users = append(da.Users, User{
+			Username: args[i],
+			Password: args[i+1],
+		})
+	}
+	return nil
+}
+
+func (da *DigestAuth) handleExcludePathsDirective(d *caddyfile.Dispenser) error {
+	da.ExcludePaths = d.RemainingArgs()
+	if len(da.ExcludePaths) == 0 {
+		return d.ArgErr()
+	}
+	return nil
+}
+
+func (da *DigestAuth) handleIntDirective(d *caddyfile.Dispenser, field *int) error {
+	if !d.NextArg() {
+		return d.ArgErr()
+	}
+	val, err := strconv.Atoi(d.Val())
+	if err != nil {
+		return d.Errf("invalid %s value: %v", d.Val(), err)
+	}
+	*field = val
 	return nil
 }
 

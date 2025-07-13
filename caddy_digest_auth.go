@@ -200,30 +200,51 @@ func (da *DigestAuth) Provision(ctx caddy.Context) error {
 
 // ServeHTTP handles the HTTP request
 func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	// Get request-scoped logger, fallback to zap.NewNop() if da.logger is nil
-	var logger *zap.Logger
-	if da.logger != nil {
-		logger = da.logger.With(
-			zap.String("method", r.Method),
-			zap.String("uri", r.URL.Path),
-			zap.String("remote_addr", r.RemoteAddr),
-		)
-	} else {
-		logger = zap.NewNop()
-	}
+	logger := da.createRequestLogger(r)
+	da.trackRequestMetrics()
 
-	// Track total requests
-	if da.metrics != nil {
-		da.metrics.IncrementMetric(&da.metrics.TotalRequests)
-	}
-
-	// Check if path should be excluded from authentication
-	if da.isPathExcluded(r.URL.Path) {
-		logger.Debug("path excluded from authentication")
+	if da.checkExcludedPath(r, logger) {
 		return next.ServeHTTP(w, r)
 	}
 
-	// Check rate limiting
+	if da.handleRateLimiting(w, r, logger) {
+		return nil
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return da.handleMissingAuthHeader(w, logger)
+	}
+
+	return da.handleAuthHeader(w, r, authHeader, logger, next)
+}
+
+func (da *DigestAuth) createRequestLogger(r *http.Request) *zap.Logger {
+	if da.logger == nil {
+		return zap.NewNop()
+	}
+	return da.logger.With(
+		zap.String("method", r.Method),
+		zap.String("uri", r.URL.Path),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
+}
+
+func (da *DigestAuth) trackRequestMetrics() {
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.TotalRequests)
+	}
+}
+
+func (da *DigestAuth) checkExcludedPath(r *http.Request, logger *zap.Logger) bool {
+	if da.isPathExcluded(r.URL.Path) {
+		logger.Debug("path excluded from authentication")
+		return true
+	}
+	return false
+}
+
+func (da *DigestAuth) handleRateLimiting(w http.ResponseWriter, r *http.Request, logger *zap.Logger) bool {
 	if da.isRateLimited(r.RemoteAddr) {
 		if da.metrics != nil {
 			da.metrics.IncrementMetric(&da.metrics.RateLimited)
@@ -231,45 +252,55 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 		logger.Warn("client blocked by rate limiting",
 			zap.Int("status", http.StatusTooManyRequests))
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
-		return nil
+		return true
 	}
+	return false
+}
 
-	// Check for Authorization header
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		if da.metrics != nil {
-			da.metrics.IncrementMetric(&da.metrics.ChallengesSent)
-		}
-		logger.Debug("no authorization header, issuing challenge",
-			zap.Int("status", http.StatusUnauthorized))
-		return da.sendChallenge(w, false, logger)
+func (da *DigestAuth) handleMissingAuthHeader(w http.ResponseWriter, logger *zap.Logger) error {
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.ChallengesSent)
 	}
+	logger.Debug("no authorization header, issuing challenge",
+		zap.Int("status", http.StatusUnauthorized))
+	return da.sendChallenge(w, false, logger)
+}
 
-	// Parse and validate the authorization header
+func (da *DigestAuth) handleAuthHeader(w http.ResponseWriter, r *http.Request, authHeader string, logger *zap.Logger, next caddyhttp.Handler) error {
 	ctx, err := da.parseAuthHeader(authHeader, r.Method)
 	if err != nil {
-		if da.metrics != nil {
-			da.metrics.IncrementMetric(&da.metrics.FailedAuths)
-		}
-		logger.Warn("malformed authorization header",
-			zap.Error(err),
-			zap.Int("status", http.StatusBadRequest))
-		da.incrementRateLimit(r.RemoteAddr)
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return nil
+		return da.handleAuthError(w, r, err, logger)
 	}
 
-	// Verify the authentication
 	pass, stale := da.verify(ctx, r.RemoteAddr, logger)
 	if !pass {
-		if da.metrics != nil {
-			da.metrics.IncrementMetric(&da.metrics.FailedAuths)
-		}
-		da.incrementRateLimit(r.RemoteAddr)
-		return da.sendChallenge(w, stale, logger)
+		return da.handleFailedAuth(w, r, ctx, stale, logger)
 	}
 
-	// Authentication successful, reset rate limit
+	return da.handleSuccessfulAuth(w, r, ctx, logger, next)
+}
+
+func (da *DigestAuth) handleAuthError(w http.ResponseWriter, r *http.Request, err error, logger *zap.Logger) error {
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.FailedAuths)
+	}
+	logger.Warn("malformed authorization header",
+		zap.Error(err),
+		zap.Int("status", http.StatusBadRequest))
+	da.incrementRateLimit(r.RemoteAddr)
+	http.Error(w, "Bad Request", http.StatusBadRequest)
+	return nil
+}
+
+func (da *DigestAuth) handleFailedAuth(w http.ResponseWriter, r *http.Request, ctx *authContext, stale bool, logger *zap.Logger) error {
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.FailedAuths)
+	}
+	da.incrementRateLimit(r.RemoteAddr)
+	return da.sendChallenge(w, stale, logger)
+}
+
+func (da *DigestAuth) handleSuccessfulAuth(w http.ResponseWriter, r *http.Request, ctx *authContext, logger *zap.Logger, next caddyhttp.Handler) error {
 	da.resetRateLimit(r.RemoteAddr)
 	if da.metrics != nil {
 		da.metrics.IncrementMetric(&da.metrics.SuccessfulAuths)
@@ -279,7 +310,6 @@ func (da *DigestAuth) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 		zap.String("username", ctx.user),
 		zap.Int("status", http.StatusOK))
 
-	// Continue to next handler
 	return next.ServeHTTP(w, r)
 }
 
@@ -288,95 +318,112 @@ func (da *DigestAuth) loadCredentials() error {
 	da.mutex.Lock()
 	defer da.mutex.Unlock()
 
-	// Load from inline users if provided
 	if len(da.Users) > 0 {
-		for _, user := range da.Users {
-			if user.Username == "" || user.Password == "" {
-				return fmt.Errorf("username and password are required for inline users")
-			}
-			// Calculate MD5 hash: username:realm:password
-			ha1 := da.md5Hash(fmt.Sprintf("%s:%s:%s", user.Username, da.Realm, user.Password))
-			da.credentials[user.Username] = credential{
-				Realm:  da.Realm,
-				Cipher: ha1,
-			}
-		}
-		if da.logger != nil {
-			da.logger.Info("loaded inline credentials", 
-				zap.Int("count", len(da.Users)),
-				zap.String("realm", da.Realm))
-		}
-		return nil
+		return da.loadInlineUsers()
 	}
-
-	// Load from htdigest file if provided
 	if da.UserFile != "" {
-		// Read the htdigest file
-		file, err := os.Open(da.UserFile)
-		if err != nil {
-			return fmt.Errorf("failed to open user file: %v", err)
-		}
-		defer file.Close()
+		return da.loadUserFile()
+	}
+	return fmt.Errorf("no credentials configured")
+}
 
-		scanner := bufio.NewScanner(file)
-		lineNum := 0
-		loadedCount := 0
-		skippedCount := 0
+func (da *DigestAuth) loadInlineUsers() error {
+	for _, user := range da.Users {
+		if user.Username == "" || user.Password == "" {
+			return fmt.Errorf("username and password are required for inline users")
+		}
+		ha1 := da.md5Hash(fmt.Sprintf("%s:%s:%s", user.Username, da.Realm, user.Password))
+		da.credentials[user.Username] = credential{
+			Realm:  da.Realm,
+			Cipher: ha1,
+		}
+	}
+	
+	if da.logger != nil {
+		da.logger.Info("loaded inline credentials", 
+			zap.Int("count", len(da.Users)),
+			zap.String("realm", da.Realm))
+	}
+	return nil
+}
+
+func (da *DigestAuth) loadUserFile() error {
+	file, err := os.Open(da.UserFile)
+	if err != nil {
+		return fmt.Errorf("failed to open user file: %v", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	lineNum := 0
+	loadedCount := 0
+	skippedCount := 0
+	
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
 		
-		for scanner.Scan() {
-			lineNum++
-			line := strings.TrimSpace(scanner.Text())
-			// Skip empty lines and comments
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			// Parse htdigest format: username:realm:md5hash
-			parts := strings.Split(line, ":")
-			if len(parts) != 3 {
-				if da.logger != nil {
-					da.logger.Warn("invalid htdigest format", 
-						zap.Int("line", lineNum), 
-						zap.String("line", line),
-						zap.String("file", da.UserFile))
-				}
-				skippedCount++
-				continue
-			}
-			username := parts[0]
-			realm := parts[1]
-			md5hash := parts[2]
-			// Validate realm matches
-			if realm != da.Realm {
-				if da.logger != nil {
-					da.logger.Warn("realm mismatch", 
-						zap.String("username", username),
-						zap.String("expected_realm", da.Realm),
-						zap.String("file_realm", realm),
-						zap.String("file", da.UserFile))
-				}
-				skippedCount++
-				continue
-			}
-			da.credentials[username] = credential{
-				Realm:  realm,
-				Cipher: md5hash,
-			}
-			loadedCount++
+		username, realm, md5hash, skip, err := da.parseUserFileLine(line, lineNum)
+		if err != nil {
+			return err
 		}
-		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("error reading user file: %v", err)
+		if skip {
+			skippedCount++
+			continue
 		}
-		if da.logger != nil {
-			da.logger.Info("loaded credentials from file",
-				zap.String("file", da.UserFile),
-				zap.Int("loaded", loadedCount),
-				zap.Int("skipped", skippedCount),
-				zap.String("realm", da.Realm))
+		
+		da.credentials[username] = credential{
+			Realm:  realm,
+			Cipher: md5hash,
 		}
-		return nil
+		loadedCount++
 	}
 
-	return fmt.Errorf("no credentials configured")
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading user file: %v", err)
+	}
+	
+	if da.logger != nil {
+		da.logger.Info("loaded credentials from file",
+			zap.String("file", da.UserFile),
+			zap.Int("loaded", loadedCount),
+			zap.Int("skipped", skippedCount),
+			zap.String("realm", da.Realm))
+	}
+	return nil
+}
+
+func (da *DigestAuth) parseUserFileLine(line string, lineNum int) (string, string, string, bool, error) {
+	parts := strings.Split(line, ":")
+	if len(parts) != 3 {
+		if da.logger != nil {
+			da.logger.Warn("invalid htdigest format", 
+				zap.Int("line", lineNum), 
+				zap.String("line", line),
+				zap.String("file", da.UserFile))
+		}
+		return "", "", "", true, nil
+	}
+
+	username := parts[0]
+	realm := parts[1]
+	md5hash := parts[2]
+
+	if realm != da.Realm {
+		if da.logger != nil {
+			da.logger.Warn("realm mismatch", 
+				zap.String("username", username),
+				zap.String("expected_realm", da.Realm),
+				zap.String("file_realm", realm),
+				zap.String("file", da.UserFile))
+		}
+		return "", "", "", true, nil
+	}
+	
+	return username, realm, md5hash, false, nil
 }
 
 // generateNonce creates a new nonce with all required components
@@ -456,62 +503,76 @@ func (da *DigestAuth) parseAuthHeader(header string, method string) (*authContex
 		return nil, fmt.Errorf("not a digest authorization header")
 	}
 
-	header = strings.TrimPrefix(header, "Digest ")
+	ctx := &authContext{method: method}
+	da.parseAuthKeyValues(strings.TrimPrefix(header, "Digest "), ctx)
 	
-	ctx := &authContext{
-		method: method,
+	if err := da.validateAuthContext(ctx); err != nil {
+		return nil, err
 	}
 	
-	// Parse key-value pairs
+	return ctx, nil
+}
+
+func (da *DigestAuth) parseAuthKeyValues(header string, ctx *authContext) {
 	pairs := strings.Split(header, ",")
 	for _, pair := range pairs {
 		pair = strings.TrimSpace(pair)
-		if strings.Contains(pair, "=") {
-			parts := strings.SplitN(pair, "=", 2)
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			
-			// Remove quotes if present
-			if strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
-				value = value[1 : len(value)-1]
-			}
-
-			switch key {
-			case "username":
-				ctx.user = value
-			case "realm":
-				ctx.realm = value
-			case "nonce":
-				ctx.nonce = value
-			case "uri":
-				ctx.uri = value
-			case "response":
-				ctx.response = value
-			case "qop":
-				ctx.qop = value
-			case "nc":
-				ctx.nc = value
-			case "cnonce":
-				ctx.cnonce = value
-			case "opaque":
-				ctx.opaque = value
-			case "method":
-				ctx.method = value
-			}
+		if !strings.Contains(pair, "=") {
+			continue
 		}
+		
+		key, value := parseKeyValue(pair)
+		da.assignAuthValue(key, value, ctx)
 	}
+}
 
-	// Validate required fields
+func parseKeyValue(pair string) (string, string) {
+	parts := strings.SplitN(pair, "=", 2)
+	key := strings.TrimSpace(parts[0])
+	value := strings.TrimSpace(parts[1])
+	
+	// Remove quotes if present
+	if strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
+		value = value[1 : len(value)-1]
+	}
+	return key, value
+}
+
+func (da *DigestAuth) assignAuthValue(key, value string, ctx *authContext) {
+	switch key {
+	case "username":
+		ctx.user = value
+	case "realm":
+		ctx.realm = value
+	case "nonce":
+		ctx.nonce = value
+	case "uri":
+		ctx.uri = value
+	case "response":
+		ctx.response = value
+	case "qop":
+		ctx.qop = value
+	case "nc":
+		ctx.nc = value
+	case "cnonce":
+		ctx.cnonce = value
+	case "opaque":
+		ctx.opaque = value
+	case "method":
+		ctx.method = value
+	}
+}
+
+func (da *DigestAuth) validateAuthContext(ctx *authContext) error {
 	if ctx.user == "" || ctx.response == "" || ctx.uri == "" || ctx.nonce == "" || ctx.realm == "" {
-		return nil, fmt.Errorf("missing required fields")
+		return fmt.Errorf("missing required fields")
 	}
 
-	// Validate qop if present
 	if ctx.qop != "" && (ctx.qop != "auth" || ctx.cnonce == "" || ctx.nc == "") {
-		return nil, fmt.Errorf("invalid qop value or missing cnonce/nc")
+		return fmt.Errorf("invalid qop value or missing cnonce/nc")
 	}
-
-	return ctx, nil
+	
+	return nil
 }
 
 // authContext holds parsed authentication data
@@ -530,90 +591,120 @@ type authContext struct {
 
 // verify validates the authentication response
 func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Logger) (bool, bool) {
-	da.mutex.RLock()
-	cred, exists := da.credentials[ctx.user]
-	da.mutex.RUnlock()
-
+	cred, exists := da.getUserCredentials(ctx.user)
 	if !exists {
-		if da.metrics != nil {
-			da.metrics.IncrementMetric(&da.metrics.UserNotFound)
-		}
-		logger.Warn("authentication failed: user not found",
-			zap.String("remote_addr", remoteAddr),
-			zap.String("username", ctx.user),
-			zap.String("realm", ctx.realm),
-			zap.Bool("user_exists", exists),
-			zap.Int("status", http.StatusUnauthorized))
+		da.handleUserNotFound(ctx, remoteAddr, logger)
 		return false, false
 	}
 	
-	if cred.Realm != ctx.realm {
-		if da.metrics != nil {
-			da.metrics.IncrementMetric(&da.metrics.RealmMismatch)
-		}
-		logger.Warn("authentication failed: realm mismatch",
-			zap.String("remote_addr", remoteAddr),
-			zap.String("username", ctx.user),
-			zap.String("expected_realm", cred.Realm),
-			zap.String("provided_realm", ctx.realm),
-			zap.Int("status", http.StatusUnauthorized))
+	if !da.validateRealm(cred, ctx, remoteAddr, logger) {
 		return false, false
 	}
 
-	// Validate nonce
 	stale, nonceData := da.validateNonce(ctx.nonce)
 	if stale {
-		if da.metrics != nil {
-			da.metrics.IncrementMetric(&da.metrics.StaleNonce)
-		}
-		logger.Warn("authentication failed: nonce is stale or invalid",
-			zap.String("remote_addr", remoteAddr),
-			zap.String("username", ctx.user),
-			zap.String("nonce", ctx.nonce),
-			zap.Int("status", http.StatusUnauthorized))
+		da.handleStaleNonce(ctx, remoteAddr, logger, nonceData)
 		return false, true
 	}
 
-	// Validate opaque if present
-	if ctx.opaque != "" && nonceData != nil && ctx.opaque != nonceData.Opaque {
-		if da.metrics != nil {
-			da.metrics.IncrementMetric(&da.metrics.OpaqueMismatch)
-		}
-		logger.Warn("authentication failed: opaque mismatch",
-			zap.String("remote_addr", remoteAddr),
-			zap.String("username", ctx.user),
-			zap.String("provided_opaque", ctx.opaque),
-			zap.String("expected_opaque", nonceData.Opaque),
-			zap.Int("status", http.StatusUnauthorized))
+	if !da.validateOpaque(ctx, nonceData, remoteAddr, logger) {
 		return false, false
 	}
 
-	// Calculate expected response
+	return da.validateResponseHash(ctx, cred, remoteAddr, logger), false
+}
+
+func (da *DigestAuth) getUserCredentials(username string) (credential, bool) {
+	da.mutex.RLock()
+	defer da.mutex.RUnlock()
+	cred, exists := da.credentials[username]
+	return cred, exists
+}
+
+func (da *DigestAuth) handleUserNotFound(ctx *authContext, remoteAddr string, logger *zap.Logger) {
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.UserNotFound)
+	}
+	logger.Warn("authentication failed: user not found",
+		zap.String("remote_addr", remoteAddr),
+		zap.String("username", ctx.user),
+		zap.String("realm", ctx.realm),
+		zap.Bool("user_exists", false),
+		zap.Int("status", http.StatusUnauthorized))
+}
+
+func (da *DigestAuth) validateRealm(cred credential, ctx *authContext, remoteAddr string, logger *zap.Logger) bool {
+	if cred.Realm == ctx.realm {
+		return true
+	}
+	
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.RealmMismatch)
+	}
+	logger.Warn("authentication failed: realm mismatch",
+		zap.String("remote_addr", remoteAddr),
+		zap.String("username", ctx.user),
+		zap.String("expected_realm", cred.Realm),
+		zap.String("provided_realm", ctx.realm),
+		zap.Int("status", http.StatusUnauthorized))
+	return false
+}
+
+func (da *DigestAuth) handleStaleNonce(ctx *authContext, remoteAddr string, logger *zap.Logger, nonceData *nonceData) {
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.StaleNonce)
+	}
+	logger.Warn("authentication failed: nonce is stale or invalid",
+		zap.String("remote_addr", remoteAddr),
+		zap.String("username", ctx.user),
+		zap.String("nonce", ctx.nonce),
+		zap.Int("status", http.StatusUnauthorized))
+}
+
+func (da *DigestAuth) validateOpaque(ctx *authContext, nonceData *nonceData, remoteAddr string, logger *zap.Logger) bool {
+	if ctx.opaque == "" || nonceData == nil || ctx.opaque == nonceData.Opaque {
+		return true
+	}
+	
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.OpaqueMismatch)
+	}
+	logger.Warn("authentication failed: opaque mismatch",
+		zap.String("remote_addr", remoteAddr),
+		zap.String("username", ctx.user),
+		zap.String("provided_opaque", ctx.opaque),
+		zap.String("expected_opaque", nonceData.Opaque),
+		zap.Int("status", http.StatusUnauthorized))
+	return false
+}
+
+func (da *DigestAuth) validateResponseHash(ctx *authContext, cred credential, remoteAddr string, logger *zap.Logger) bool {
+	expected := da.calculateExpectedResponse(ctx, cred)
+	if expected == ctx.response {
+		return true
+	}
+	
+	if da.metrics != nil {
+		da.metrics.IncrementMetric(&da.metrics.InvalidResponse)
+	}
+	logger.Warn("authentication failed: invalid response hash",
+		zap.String("remote_addr", remoteAddr),
+		zap.String("username", ctx.user),
+		zap.String("method", ctx.method),
+		zap.String("uri", ctx.uri),
+		zap.Int("status", http.StatusUnauthorized))
+	return false
+}
+
+func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credential) string {
 	ha1 := cred.Cipher
 	ha2 := da.md5Hash(fmt.Sprintf("%s:%s", ctx.method, ctx.uri))
 
-	var expectedResponse string
 	if ctx.qop != "" {
-		expectedResponse = da.md5Hash(fmt.Sprintf("%s:%s:%s:%s:%s:%s",
+		return da.md5Hash(fmt.Sprintf("%s:%s:%s:%s:%s:%s",
 			ha1, ctx.nonce, ctx.nc, ctx.cnonce, ctx.qop, ha2))
-	} else {
-		expectedResponse = da.md5Hash(fmt.Sprintf("%s:%s:%s", ha1, ctx.nonce, ha2))
 	}
-
-	if expectedResponse != ctx.response {
-		if da.metrics != nil {
-			da.metrics.IncrementMetric(&da.metrics.InvalidResponse)
-		}
-		logger.Warn("authentication failed: invalid response hash",
-			zap.String("remote_addr", remoteAddr),
-			zap.String("username", ctx.user),
-			zap.String("method", ctx.method),
-			zap.String("uri", ctx.uri),
-			zap.Int("status", http.StatusUnauthorized))
-		return false, false
-	}
-
-	return true, false
+	return da.md5Hash(fmt.Sprintf("%s:%s:%s", ha1, ctx.nonce, ha2))
 }
 
 // validateNonce checks if a nonce is valid and not stale
