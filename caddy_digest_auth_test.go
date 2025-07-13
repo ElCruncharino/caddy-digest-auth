@@ -63,11 +63,11 @@ func TestDigestAuthValidation(t *testing.T) {
 func TestDigestAuthModuleInfo(t *testing.T) {
 	da := DigestAuth{}
 	info := da.CaddyModule()
-	
+
 	if info.ID != "http.handlers.digest_auth" {
 		t.Errorf("Expected module ID 'http.handlers.digest_auth', got '%s'", info.ID)
 	}
-	
+
 	if info.New == nil {
 		t.Error("Expected New function to be set")
 	}
@@ -79,20 +79,20 @@ func TestDigestAuthProvision(t *testing.T) {
 			{Username: "admin", Password: "password"},
 		},
 	}
-	
+
 	// Create a mock context
 	ctx := caddy.Context{}
-	
+
 	err := da.Provision(ctx)
 	if err != nil {
 		t.Errorf("Provision failed: %v", err)
 	}
-	
+
 	// Check that defaults were set
 	if da.Realm == "" {
 		t.Error("Expected realm to be set to default")
 	}
-	
+
 	if da.Expires == 0 {
 		t.Error("Expected expires to be set to default")
 	}

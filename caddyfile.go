@@ -20,15 +20,15 @@ func (da *DigestAuth) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 
 func (da *DigestAuth) parseCaddyfileBlock(d *caddyfile.Dispenser) error {
 	handlers := map[string]func(*caddyfile.Dispenser) error{
-		"realm":            da.handleRealmDirective,
-		"user_file":        da.handleUserFileDirective,
-		"users":            da.handleUsersDirective,
-		"exclude_paths":    da.handleExcludePathsDirective,
-		"expires":          da.handleExpiresDirective,
-		"replays":          da.handleReplaysDirective,
-		"timeout":          da.handleTimeoutDirective,
-		"rate_limit_burst": da.handleRateLimitBurstDirective,
-		"rate_limit_window":da.handleRateLimitWindowDirective,
+		"realm":             da.handleRealmDirective,
+		"user_file":         da.handleUserFileDirective,
+		"users":             da.handleUsersDirective,
+		"exclude_paths":     da.handleExcludePathsDirective,
+		"expires":           da.handleExpiresDirective,
+		"replays":           da.handleReplaysDirective,
+		"timeout":           da.handleTimeoutDirective,
+		"rate_limit_burst":  da.handleRateLimitBurstDirective,
+		"rate_limit_window": da.handleRateLimitWindowDirective,
 	}
 
 	handler, exists := handlers[d.Val()]
@@ -82,7 +82,7 @@ func (da *DigestAuth) handleUsersDirective(d *caddyfile.Dispenser) error {
 	if len(args)%2 != 0 {
 		return d.Errf("users must have even number of arguments (username password pairs)")
 	}
-	
+
 	for i := 0; i < len(args); i += 2 {
 		da.Users = append(da.Users, User{
 			Username: args[i],
@@ -112,4 +112,4 @@ func (da *DigestAuth) handleIntDirective(d *caddyfile.Dispenser, field *int) err
 	return nil
 }
 
-// bowlingMatcher is used for test matchers (the game goes on) 
+// bowlingMatcher is used for test matchers (the game goes on)
