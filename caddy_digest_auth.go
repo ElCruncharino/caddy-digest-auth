@@ -14,13 +14,14 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
-	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 )
 
 // The rug ties the room together (for context cleanup)
 var rugCleanup sync.Once
+
 // stranger: sometimes there's a logger, well, he's the logger for his time and place (unused)
 
 func init() {
@@ -33,11 +34,11 @@ type DigestAuth struct {
 	// Configuration fields
 	Realm           string   `json:"realm,omitempty"`
 	UserFile        string   `json:"user_file,omitempty"`
-	Users           []User   `json:"users,omitempty"`           // Inline user credentials
-	ExcludePaths    []string `json:"exclude_paths,omitempty"`    // Paths that don't require authentication
-	Expires         int      `json:"expires,omitempty"`         // Nonce expiration in seconds
-	Replays         int      `json:"replays,omitempty"`         // Max nonce reuses
-	Timeout         int      `json:"timeout,omitempty"`         // Nonce timeout in seconds
+	Users           []User   `json:"users,omitempty"`             // Inline user credentials
+	ExcludePaths    []string `json:"exclude_paths,omitempty"`     // Paths that don't require authentication
+	Expires         int      `json:"expires,omitempty"`           // Nonce expiration in seconds
+	Replays         int      `json:"replays,omitempty"`           // Max nonce reuses
+	Timeout         int      `json:"timeout,omitempty"`           // Nonce timeout in seconds
 	RateLimitBurst  int      `json:"rate_limit_burst,omitempty"`  // Rate limiting burst
 	RateLimitWindow int      `json:"rate_limit_window,omitempty"` // Rate limiting window in seconds
 	EnableMetrics   bool     `json:"enable_metrics,omitempty"`    // Enable metrics collection
@@ -66,34 +67,34 @@ type credential struct {
 
 // nonceData stores nonce metadata for validation and replay protection
 type nonceData struct {
-	Timestamp   int64  `json:"timestamp"`
-	Counter     int64  `json:"counter"`
-	NonceSalt   string `json:"nonce_salt"`
-	Opaque      string `json:"opaque"`
-	Uses        int    `json:"uses"`
-	ExpiresAt   int64  `json:"expires_at"`
+	Timestamp int64  `json:"timestamp"`
+	Counter   int64  `json:"counter"`
+	NonceSalt string `json:"nonce_salt"`
+	Opaque    string `json:"opaque"`
+	Uses      int    `json:"uses"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 // rateLimitData tracks failed authentication attempts
 type rateLimitData struct {
-	Attempts   int   `json:"attempts"`
-	FirstTry   int64 `json:"first_try"`
-	BlockedAt  int64 `json:"blocked_at"`
+	Attempts  int   `json:"attempts"`
+	FirstTry  int64 `json:"first_try"`
+	BlockedAt int64 `json:"blocked_at"`
 }
 
 // Metrics tracks authentication statistics (optional)
 type Metrics struct {
-	TotalRequests     int64
-	SuccessfulAuths   int64
-	FailedAuths       int64
-	RateLimited       int64
-	ChallengesSent    int64
-	UserNotFound      int64
-	InvalidResponse   int64
-	StaleNonce        int64
-	RealmMismatch     int64
-	OpaqueMismatch    int64
-	mutex             sync.RWMutex
+	TotalRequests   int64
+	SuccessfulAuths int64
+	FailedAuths     int64
+	RateLimited     int64
+	ChallengesSent  int64
+	UserNotFound    int64
+	InvalidResponse int64
+	StaleNonce      int64
+	RealmMismatch   int64
+	OpaqueMismatch  int64
+	mutex           sync.RWMutex
 }
 
 // IncrementMetric safely increments a metric counter
@@ -110,21 +111,21 @@ func (m *Metrics) GetMetrics() map[string]int64 {
 	if m == nil {
 		return nil
 	}
-	
+
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	
+
 	return map[string]int64{
-		"total_requests":      m.TotalRequests,
-		"successful_auths":    m.SuccessfulAuths,
-		"failed_auths":        m.FailedAuths,
-		"rate_limited":        m.RateLimited,
-		"challenges_sent":     m.ChallengesSent,
-		"user_not_found":      m.UserNotFound,
-		"invalid_response":    m.InvalidResponse,
-		"stale_nonce":         m.StaleNonce,
-		"realm_mismatch":      m.RealmMismatch,
-		"opaque_mismatch":     m.OpaqueMismatch,
+		"total_requests":   m.TotalRequests,
+		"successful_auths": m.SuccessfulAuths,
+		"failed_auths":     m.FailedAuths,
+		"rate_limited":     m.RateLimited,
+		"challenges_sent":  m.ChallengesSent,
+		"user_not_found":   m.UserNotFound,
+		"invalid_response": m.InvalidResponse,
+		"stale_nonce":      m.StaleNonce,
+		"realm_mismatch":   m.RealmMismatch,
+		"opaque_mismatch":  m.OpaqueMismatch,
 	}
 }
 
@@ -141,7 +142,7 @@ func (da *DigestAuth) Provision(ctx caddy.Context) error {
 	da.logger = ctx.Logger(da)
 	da.setDefaults()
 	da.initializeMaps()
-	
+
 	if err := da.generateSalt(); err != nil {
 		return err
 	}
@@ -160,11 +161,11 @@ func (da *DigestAuth) setDefaults() {
 	if da.Realm == "" {
 		da.Realm = "Restricted Area"
 	}
-	
+
 	// Set integer defaults using struct slices
 	intDefaults := []struct {
-		field    *int
-		condition bool
+		field      *int
+		condition  bool
 		defaultVal int
 	}{
 		{&da.Expires, da.Expires == 0, 600},
@@ -321,7 +322,7 @@ func (da *DigestAuth) handleSuccessfulAuth(w http.ResponseWriter, r *http.Reques
 	if da.metrics != nil {
 		da.metrics.IncrementMetric(&da.metrics.SuccessfulAuths)
 	}
-	
+
 	logger.Info("authentication successful",
 		zap.String("username", ctx.user),
 		zap.Int("status", http.StatusOK))
@@ -354,9 +355,9 @@ func (da *DigestAuth) loadInlineUsers() error {
 			Cipher: ha1,
 		}
 	}
-	
+
 	if da.logger != nil {
-		da.logger.Info("loaded inline credentials", 
+		da.logger.Info("loaded inline credentials",
 			zap.Int("count", len(da.Users)),
 			zap.String("realm", da.Realm))
 	}
@@ -372,7 +373,7 @@ func (da *DigestAuth) loadUserFile() error {
 
 	scanner := bufio.NewScanner(file)
 	var loadedCount, skippedCount int
-	
+
 	for lineNum := 1; scanner.Scan(); lineNum++ {
 		line := strings.TrimSpace(scanner.Text())
 		l, s, err := da.processUserFileLine(line, lineNum)
@@ -386,7 +387,7 @@ func (da *DigestAuth) loadUserFile() error {
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading user file: %v", err)
 	}
-	
+
 	da.logFileLoadStats(loadedCount, skippedCount)
 	return nil
 }
@@ -395,12 +396,12 @@ func (da *DigestAuth) processUserFileLine(line string, lineNum int) (loaded int,
 	if line == "" || strings.HasPrefix(line, "#") {
 		return 0, 0, nil
 	}
-	
+
 	username, realm, md5hash, skip, err := da.parseUserFileLine(line, lineNum)
 	if err != nil || skip {
 		return 0, 1, err
 	}
-	
+
 	da.credentials[username] = credential{Realm: realm, Cipher: md5hash}
 	return 1, 0, nil
 }
@@ -419,8 +420,8 @@ func (da *DigestAuth) parseUserFileLine(line string, lineNum int) (string, strin
 	parts := strings.Split(line, ":")
 	if len(parts) != 3 {
 		if da.logger != nil {
-			da.logger.Warn("invalid htdigest format", 
-				zap.Int("line", lineNum), 
+			da.logger.Warn("invalid htdigest format",
+				zap.Int("line", lineNum),
 				zap.String("line", line),
 				zap.String("file", da.UserFile))
 		}
@@ -433,7 +434,7 @@ func (da *DigestAuth) parseUserFileLine(line string, lineNum int) (string, strin
 
 	if realm != da.Realm {
 		if da.logger != nil {
-			da.logger.Warn("realm mismatch", 
+			da.logger.Warn("realm mismatch",
 				zap.String("username", username),
 				zap.String("expected_realm", da.Realm),
 				zap.String("file_realm", realm),
@@ -441,7 +442,7 @@ func (da *DigestAuth) parseUserFileLine(line string, lineNum int) (string, strin
 		}
 		return "", "", "", true, nil
 	}
-	
+
 	return username, realm, md5hash, false, nil
 }
 
@@ -491,7 +492,7 @@ func (da *DigestAuth) generateNonce() (string, *nonceData, error) {
 func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool, logger *zap.Logger) error {
 	nonce, nonceData, err := da.generateNonce()
 	if err != nil {
-		logger.Error("failed to generate nonce", 
+		logger.Error("failed to generate nonce",
 			zap.Error(err),
 			zap.Int("status", http.StatusInternalServerError))
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -500,18 +501,18 @@ func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool, logger *z
 
 	challenge := fmt.Sprintf(`Digest realm="%s", qop="auth", algorithm=MD5, nonce="%s", opaque="%s"`,
 		da.Realm, nonce, nonceData.Opaque)
-	
+
 	if stale {
 		challenge += ", stale=true"
 	}
 
 	w.Header().Set("WWW-Authenticate", challenge)
-	
+
 	status := http.StatusUnauthorized
 	logger.Info("authentication challenge sent",
 		zap.Int("status", status),
 		zap.Bool("stale", stale))
-	
+
 	http.Error(w, "Unauthorized", status)
 	return nil
 }
@@ -524,11 +525,11 @@ func (da *DigestAuth) parseAuthHeader(header string, method string) (*authContex
 
 	ctx := &authContext{method: method}
 	da.parseAuthKeyValues(strings.TrimPrefix(header, "Digest "), ctx)
-	
+
 	if err := da.validateAuthContext(ctx); err != nil {
 		return nil, err
 	}
-	
+
 	return ctx, nil
 }
 
@@ -539,7 +540,7 @@ func (da *DigestAuth) parseAuthKeyValues(header string, ctx *authContext) {
 		if !strings.Contains(pair, "=") {
 			continue
 		}
-		
+
 		key, value := parseKeyValue(pair)
 		da.assignAuthValue(key, value, ctx)
 	}
@@ -549,7 +550,7 @@ func parseKeyValue(pair string) (string, string) {
 	parts := strings.SplitN(pair, "=", 2)
 	key := strings.TrimSpace(parts[0])
 	value := strings.TrimSpace(parts[1])
-	
+
 	// Remove quotes if present
 	if strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
 		value = value[1 : len(value)-1]
@@ -570,7 +571,7 @@ func (da *DigestAuth) assignAuthValue(key, value string, ctx *authContext) {
 		"opaque":   func(v string) { ctx.opaque = v },
 		"method":   func(v string) { ctx.method = v },
 	}
-	
+
 	if handler, exists := keyHandlers[key]; exists {
 		handler(value)
 	}
@@ -630,7 +631,7 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 		da.handleUserNotFound(ctx, remoteAddr, logger)
 		return false, false
 	}
-	
+
 	if !da.validateRealm(cred, ctx, remoteAddr, logger) {
 		return false, false
 	}
@@ -671,7 +672,7 @@ func (da *DigestAuth) validateRealm(cred credential, ctx *authContext, remoteAdd
 	if cred.Realm == ctx.realm {
 		return true
 	}
-	
+
 	if da.metrics != nil {
 		da.metrics.IncrementMetric(&da.metrics.RealmMismatch)
 	}
@@ -699,7 +700,7 @@ func (da *DigestAuth) validateOpaque(ctx *authContext, nonceData *nonceData, rem
 	if ctx.opaque == "" || nonceData == nil || ctx.opaque == nonceData.Opaque {
 		return true
 	}
-	
+
 	if da.metrics != nil {
 		da.metrics.IncrementMetric(&da.metrics.OpaqueMismatch)
 	}
@@ -717,7 +718,7 @@ func (da *DigestAuth) validateResponseHash(ctx *authContext, cred credential, re
 	if expected == ctx.response {
 		return true
 	}
-	
+
 	if da.metrics != nil {
 		da.metrics.IncrementMetric(&da.metrics.InvalidResponse)
 	}
@@ -757,7 +758,7 @@ func (da *DigestAuth) validateNonce(nonce string) (bool, *nonceData) {
 	}
 
 	now := time.Now().Unix()
-	
+
 	// Check expiration
 	if now > nonceData.ExpiresAt {
 		delete(da.nonces, nonce)
@@ -814,7 +815,7 @@ func (da *DigestAuth) incrementRateLimit(remoteAddr string) {
 
 	now := time.Now().Unix()
 	rateData, exists := da.rateLimits[remoteAddr]
-	
+
 	if !exists {
 		rateData = &rateLimitData{
 			Attempts: 1,
@@ -841,9 +842,9 @@ func (da *DigestAuth) cleanupRoutine() {
 
 	for range ticker.C {
 		da.mutex.Lock()
-		
+
 		now := time.Now().Unix()
-		
+
 		// Clean up expired nonces
 		for nonce, nonceData := range da.nonces {
 			if now > nonceData.ExpiresAt {
@@ -935,7 +936,7 @@ func (da *DigestAuth) isPathExcluded(path string) bool {
 	if len(da.ExcludePaths) == 0 {
 		return false
 	}
-	
+
 	for _, excludePath := range da.ExcludePaths {
 		// Handle wildcard patterns
 		if strings.HasSuffix(excludePath, "/*") {
