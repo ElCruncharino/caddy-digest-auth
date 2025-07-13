@@ -57,3 +57,4 @@ Caddyfile
 # User files (for security)
 users.htdigest
 users.json 
+.aider*
