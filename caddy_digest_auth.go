@@ -139,53 +139,62 @@ func (DigestAuth) CaddyModule() caddy.ModuleInfo {
 // Provision sets up the module
 func (da *DigestAuth) Provision(ctx caddy.Context) error {
 	da.logger = ctx.Logger(da)
+	da.setDefaults()
+	da.initializeMaps()
 	
-	// Set defaults
-	if da.Realm == "" {
-		da.Realm = "Restricted Area"
+	if err := da.generateSalt(); err != nil {
+		return err
 	}
-	if da.Expires == 0 {
-		da.Expires = 600 // 10 minutes
-	}
-	if da.Replays == 0 {
-		da.Replays = 500
-	}
-	if da.Timeout == 0 {
-		da.Timeout = 600 // 10 minutes
-	}
-	if da.RateLimitBurst == 0 {
-		da.RateLimitBurst = 50
-	}
-	if da.RateLimitWindow == 0 {
-		da.RateLimitWindow = 600 // 10 minutes
+	if err := da.loadCredentials(); err != nil {
+		return fmt.Errorf("failed to load credentials: %v", err)
 	}
 
-	// Initialize maps
+	go da.cleanupRoutine()
+	da.initMetrics()
+	da.logProvisioningInfo()
+	return nil
+}
+
+func (da *DigestAuth) setDefaults() {
+	defaults := map[*string]map[string]interface{}{
+		&da.Realm:           {"value": "Restricted Area", "condition": da.Realm == ""},
+		&da.Expires:         {"value": 600, "condition": da.Expires == 0},
+		&da.Replays:         {"value": 500, "condition": da.Replays == 0},
+		&da.Timeout:         {"value": 600, "condition": da.Timeout == 0},
+		&da.RateLimitBurst:  {"value": 50, "condition": da.RateLimitBurst == 0},
+		&da.RateLimitWindow: {"value": 600, "condition": da.RateLimitWindow == 0},
+	}
+
+	for ptr, config := range defaults {
+		if config["condition"].(bool) {
+			*ptr = config["value"].(int)
+		}
+	}
+}
+
+func (da *DigestAuth) initializeMaps() {
 	da.credentials = make(map[string]credential)
 	da.nonces = make(map[string]*nonceData)
 	da.rateLimits = make(map[string]*rateLimitData)
+}
 
-	// Generate global salt
+func (da *DigestAuth) generateSalt() error {
 	saltBytes := make([]byte, 16)
 	if _, err := rand.Read(saltBytes); err != nil {
 		return fmt.Errorf("failed to generate salt: %v", err)
 	}
 	da.salt = base64.StdEncoding.EncodeToString(saltBytes)
+	return nil
+}
 
-	// Load user credentials
-	if err := da.loadCredentials(); err != nil {
-		return fmt.Errorf("failed to load credentials: %v", err)
-	}
-
-	// Start cleanup goroutine
-	go da.cleanupRoutine()
-
-	// Initialize metrics if enabled
+func (da *DigestAuth) initMetrics() {
 	if da.EnableMetrics {
 		da.metrics = &Metrics{}
 		da.logger.Info("metrics collection enabled")
 	}
+}
 
+func (da *DigestAuth) logProvisioningInfo() {
 	da.logger.Info("digest auth module provisioned",
 		zap.String("realm", da.Realm),
 		zap.Int("expires", da.Expires),
@@ -194,8 +203,6 @@ func (da *DigestAuth) Provision(ctx caddy.Context) error {
 		zap.Int("rate_limit_window", da.RateLimitWindow),
 		zap.Int("exclude_paths", len(da.ExcludePaths)),
 		zap.Bool("metrics_enabled", da.EnableMetrics))
-
-	return nil
 }
 
 // ServeHTTP handles the HTTP request
@@ -355,45 +362,48 @@ func (da *DigestAuth) loadUserFile() error {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
-	lineNum := 0
-	loadedCount := 0
-	skippedCount := 0
+	var loadedCount, skippedCount int
 	
-	for scanner.Scan() {
-		lineNum++
+	for lineNum := 1; scanner.Scan(); lineNum++ {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		
-		username, realm, md5hash, skip, err := da.parseUserFileLine(line, lineNum)
+		l, s, err := da.processUserFileLine(line, lineNum)
+		loadedCount += l
+		skippedCount += s
 		if err != nil {
 			return err
 		}
-		if skip {
-			skippedCount++
-			continue
-		}
-		
-		da.credentials[username] = credential{
-			Realm:  realm,
-			Cipher: md5hash,
-		}
-		loadedCount++
 	}
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading user file: %v", err)
 	}
 	
+	da.logFileLoadStats(loadedCount, skippedCount)
+	return nil
+}
+
+func (da *DigestAuth) processUserFileLine(line string, lineNum int) (loaded int, skipped int, err error) {
+	if line == "" || strings.HasPrefix(line, "#") {
+		return 0, 0, nil
+	}
+	
+	username, realm, md5hash, skip, err := da.parseUserFileLine(line, lineNum)
+	if err != nil || skip {
+		return 0, 1, err
+	}
+	
+	da.credentials[username] = credential{Realm: realm, Cipher: md5hash}
+	return 1, 0, nil
+}
+
+func (da *DigestAuth) logFileLoadStats(loaded, skipped int) {
 	if da.logger != nil {
 		da.logger.Info("loaded credentials from file",
 			zap.String("file", da.UserFile),
-			zap.Int("loaded", loadedCount),
-			zap.Int("skipped", skippedCount),
+			zap.Int("loaded", loaded),
+			zap.Int("skipped", skipped),
 			zap.String("realm", da.Realm))
 	}
-	return nil
 }
 
 func (da *DigestAuth) parseUserFileLine(line string, lineNum int) (string, string, string, bool, error) {
@@ -830,48 +840,52 @@ func (da *DigestAuth) cleanupRoutine() {
 
 // Validate validates the module configuration
 func (da *DigestAuth) Validate() error {
-	if da.UserFile == "" && len(da.Users) == 0 {
-		return fmt.Errorf("either user_file or users must be specified")
+	if err := da.validateBasicConfig(); err != nil {
+		return err
 	}
-	if da.UserFile != "" && len(da.Users) > 0 {
+	da.validateSecuritySettings()
+	if err := da.validateUserFile(); err != nil {
+		return err
+	}
+	return da.validateInlineUsers()
+}
+
+func (da *DigestAuth) validateBasicConfig() error {
+	switch {
+	case da.UserFile == "" && len(da.Users) == 0:
+		return fmt.Errorf("either user_file or users must be specified")
+	case da.UserFile != "" && len(da.Users) > 0:
 		return fmt.Errorf("cannot specify both inline users and user_file")
 	}
-	// Security warnings
-	if da.Expires > 3600 {
-		if da.logger != nil {
-			da.logger.Warn("long nonce expiration may reduce security",
-				zap.Int("expires", da.Expires),
-				zap.String("recommendation", "use 300-600 seconds for better security"))
-		}
+	return nil
+}
+
+func (da *DigestAuth) validateSecuritySettings() {
+	da.checkSecurityThreshold("Expires", da.Expires > 3600, 3600, "use 300-600 seconds for better security")
+	da.checkSecurityThreshold("RateLimitBurst", da.RateLimitBurst > 100, 100, "use 10-50 for better protection")
+	da.checkSecurityThreshold("RateLimitWindow", da.RateLimitWindow < 60, 60, "use 300-600 seconds minimum")
+	da.checkSecurityThreshold("Replays", da.Replays > 1000, 1000, "use 100-500 for better security")
+}
+
+func (da *DigestAuth) checkSecurityThreshold(name string, condition bool, threshold int, recommendation string) {
+	if condition && da.logger != nil {
+		da.logger.Warn(fmt.Sprintf("high %s may reduce security", name),
+			zap.Int(name, threshold),
+			zap.String("recommendation", recommendation))
 	}
-	if da.RateLimitBurst > 100 {
-		if da.logger != nil {
-			da.logger.Warn("high rate limit burst may allow abuse",
-				zap.Int("rate_limit_burst", da.RateLimitBurst),
-				zap.String("recommendation", "use 10-50 for better protection"))
-		}
+}
+
+func (da *DigestAuth) validateUserFile() error {
+	if da.UserFile == "" {
+		return nil
 	}
-	if da.RateLimitWindow < 60 {
-		if da.logger != nil {
-			da.logger.Warn("very short rate limit window may block legitimate users",
-				zap.Int("rate_limit_window", da.RateLimitWindow),
-				zap.String("recommendation", "use 300-600 seconds minimum"))
-		}
+	if _, err := os.Stat(da.UserFile); os.IsNotExist(err) {
+		return fmt.Errorf("user file does not exist: %s", da.UserFile)
 	}
-	if da.Replays > 1000 {
-		if da.logger != nil {
-			da.logger.Warn("high replay limit may reduce security",
-				zap.Int("replays", da.Replays),
-				zap.String("recommendation", "use 100-500 for better security"))
-		}
-	}
-	// Validate user file exists if specified
-	if da.UserFile != "" {
-		if _, err := os.Stat(da.UserFile); os.IsNotExist(err) {
-			return fmt.Errorf("user file does not exist: %s", da.UserFile)
-		}
-	}
-	// Validate inline users
+	return nil
+}
+
+func (da *DigestAuth) validateInlineUsers() error {
 	for i, user := range da.Users {
 		if user.Username == "" {
 			return fmt.Errorf("inline user %d: username cannot be empty", i+1)
@@ -879,15 +893,17 @@ func (da *DigestAuth) Validate() error {
 		if user.Password == "" {
 			return fmt.Errorf("inline user %d: password cannot be empty", i+1)
 		}
-		if len(user.Password) < 8 {
-			if da.logger != nil {
-				da.logger.Warn("weak password detected",
-					zap.String("username", user.Username),
-					zap.String("recommendation", "use passwords with at least 8 characters"))
-			}
-		}
+		da.checkPasswordStrength(user)
 	}
 	return nil
+}
+
+func (da *DigestAuth) checkPasswordStrength(user User) {
+	if len(user.Password) < 8 && da.logger != nil {
+		da.logger.Warn("weak password detected",
+			zap.String("username", user.Username),
+			zap.String("recommendation", "use passwords with at least 8 characters"))
+	}
 }
 
 // isPathExcluded checks if the given path should be excluded from authentication
