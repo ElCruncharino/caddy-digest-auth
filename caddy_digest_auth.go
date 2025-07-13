@@ -558,40 +558,55 @@ func parseKeyValue(pair string) (string, string) {
 }
 
 func (da *DigestAuth) assignAuthValue(key, value string, ctx *authContext) {
-	switch key {
-	case "username":
-		ctx.user = value
-	case "realm":
-		ctx.realm = value
-	case "nonce":
-		ctx.nonce = value
-	case "uri":
-		ctx.uri = value
-	case "response":
-		ctx.response = value
-	case "qop":
-		ctx.qop = value
-	case "nc":
-		ctx.nc = value
-	case "cnonce":
-		ctx.cnonce = value
-	case "opaque":
-		ctx.opaque = value
-	case "method":
-		ctx.method = value
+	keyHandlers := map[string]func(string){
+		"username": func(v string) { ctx.user = v },
+		"realm":    func(v string) { ctx.realm = v },
+		"nonce":    func(v string) { ctx.nonce = v },
+		"uri":      func(v string) { ctx.uri = v },
+		"response": func(v string) { ctx.response = v },
+		"qop":      func(v string) { ctx.qop = v },
+		"nc":       func(v string) { ctx.nc = v },
+		"cnonce":   func(v string) { ctx.cnonce = v },
+		"opaque":   func(v string) { ctx.opaque = v },
+		"method":   func(v string) { ctx.method = v },
+	}
+	
+	if handler, exists := keyHandlers[key]; exists {
+		handler(value)
 	}
 }
 
 func (da *DigestAuth) validateAuthContext(ctx *authContext) error {
-	if ctx.user == "" || ctx.response == "" || ctx.uri == "" || ctx.nonce == "" || ctx.realm == "" {
+	if missingRequiredFields(ctx) {
 		return fmt.Errorf("missing required fields")
 	}
-
-	if ctx.qop != "" && (ctx.qop != "auth" || ctx.cnonce == "" || ctx.nc == "") {
+	if hasInvalidQop(ctx) {
 		return fmt.Errorf("invalid qop value or missing cnonce/nc")
 	}
-	
 	return nil
+}
+
+func missingRequiredFields(ctx *authContext) bool {
+	required := []string{
+		ctx.user,
+		ctx.response,
+		ctx.uri,
+		ctx.nonce,
+		ctx.realm,
+	}
+	for _, val := range required {
+		if val == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasInvalidQop(ctx *authContext) bool {
+	if ctx.qop == "" {
+		return false
+	}
+	return ctx.qop != "auth" || ctx.cnonce == "" || ctx.nc == ""
 }
 
 // authContext holds parsed authentication data
