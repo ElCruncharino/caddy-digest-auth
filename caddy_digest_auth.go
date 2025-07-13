@@ -156,18 +156,27 @@ func (da *DigestAuth) Provision(ctx caddy.Context) error {
 }
 
 func (da *DigestAuth) setDefaults() {
-	defaults := map[*string]map[string]interface{}{
-		&da.Realm:           {"value": "Restricted Area", "condition": da.Realm == ""},
-		&da.Expires:         {"value": 600, "condition": da.Expires == 0},
-		&da.Replays:         {"value": 500, "condition": da.Replays == 0},
-		&da.Timeout:         {"value": 600, "condition": da.Timeout == 0},
-		&da.RateLimitBurst:  {"value": 50, "condition": da.RateLimitBurst == 0},
-		&da.RateLimitWindow: {"value": 600, "condition": da.RateLimitWindow == 0},
+	// Set string defaults
+	if da.Realm == "" {
+		da.Realm = "Restricted Area"
+	}
+	
+	// Set integer defaults using struct slices
+	intDefaults := []struct {
+		field    *int
+		condition bool
+		defaultVal int
+	}{
+		{&da.Expires, da.Expires == 0, 600},
+		{&da.Replays, da.Replays == 0, 500},
+		{&da.Timeout, da.Timeout == 0, 600},
+		{&da.RateLimitBurst, da.RateLimitBurst == 0, 50},
+		{&da.RateLimitWindow, da.RateLimitWindow == 0, 600},
 	}
 
-	for ptr, config := range defaults {
-		if config["condition"].(bool) {
-			*ptr = config["value"].(int)
+	for _, def := range intDefaults {
+		if def.condition {
+			*def.field = def.defaultVal
 		}
 	}
 }
