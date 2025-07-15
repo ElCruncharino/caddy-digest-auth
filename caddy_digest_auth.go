@@ -33,8 +33,8 @@ func init() {
 
 // Algorithm constants
 const (
-	AlgorithmSHA256      = "SHA-256"
-	AlgorithmSHA512256   = "SHA-512-256"
+	AlgorithmSHA256    = "SHA-256"
+	AlgorithmSHA512256 = "SHA-512-256"
 )
 
 // DigestAuth implements HTTP Digest Authentication for Caddy
@@ -360,7 +360,13 @@ func (da *DigestAuth) loadInlineUsers() error {
 		}
 		// For inline users, calculate HA1 on the fly.
 		// This assumes the provided password is the plain text password.
-		ha1 := da.digestHash("MD5", fmt.Sprintf("%s:%s:%s", user.Username, da.Realm, user.Password))
+		// Use the configured algorithm for HA1 calculation for inline users.
+		// If no algorithm is specified, default to MD5.
+		alg := da.Algorithm
+		if alg == "" {
+			alg = "MD5"
+		}
+		ha1 := da.digestHash(alg, fmt.Sprintf("%s:%s:%s", user.Username, da.Realm, user.Password))
 		da.credentials[user.Username] = credential{
 			Realm: da.Realm,
 			HA1:   ha1,
@@ -594,16 +600,16 @@ func parseKeyValue(pair string) (string, string) {
 
 func (da *DigestAuth) assignAuthValue(key, value string, ctx *authContext) {
 	keyHandlers := map[string]func(string){
-		"username": func(v string) { ctx.user = v },
-		"realm":    func(v string) { ctx.realm = v },
-		"nonce":    func(v string) { ctx.nonce = v },
-		"uri":      func(v string) { ctx.uri = v },
-		"response": func(v string) { ctx.response = v },
-		"qop":      func(v string) { ctx.qop = v },
-		"nc":       func(v string) { ctx.nc = v },
-		"cnonce":   func(v string) { ctx.cnonce = v },
-		"opaque":   func(v string) { ctx.opaque = v },
-		"method":   func(v string) { ctx.method = v },
+		"username":  func(v string) { ctx.user = v },
+		"realm":     func(v string) { ctx.realm = v },
+		"nonce":     func(v string) { ctx.nonce = v },
+		"uri":       func(v string) { ctx.uri = v },
+		"response":  func(v string) { ctx.response = v },
+		"qop":       func(v string) { ctx.qop = v },
+		"nc":        func(v string) { ctx.nc = v },
+		"cnonce":    func(v string) { ctx.cnonce = v },
+		"opaque":    func(v string) { ctx.opaque = v },
+		"method":    func(v string) { ctx.method = v },
 		"algorithm": func(v string) { ctx.algorithm = v },
 	}
 
@@ -772,7 +778,7 @@ func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credentia
 	algorithm := da.getAlgorithmForClient(ctx)
 	// RFC 7616 requires supporting both quoted and unquoted realm values
 	effectiveRealm := strings.Trim(ctx.realm, `"`)
-	
+
 	// Calculate hashes with proper encoding
 	// HA1 is already pre-calculated and stored in credentials
 	ha1 := cred.HA1
@@ -850,7 +856,7 @@ func (da *DigestAuth) validateNonce(nonce string) (bool, *nonceData) {
 // digestHash calculates hash using configured algorithm
 func (da *DigestAuth) digestHash(algorithm string, input string) string {
 	inputBytes := []byte(input)
-	
+
 	switch algorithm {
 	case AlgorithmSHA256:
 		hash := sha256.Sum256(inputBytes)
@@ -989,25 +995,25 @@ func (da *DigestAuth) validateAlgorithm() error {
 	if da.Algorithm == "" {
 		return nil
 	}
-	
+
 	validAlgorithms := map[string]bool{
-		"MD5":             true,
-		AlgorithmSHA256:   true,
+		"MD5":              true,
+		AlgorithmSHA256:    true,
 		AlgorithmSHA512256: true,
 	}
-	
+
 	algUpper := strings.ToUpper(da.Algorithm)
 	if !validAlgorithms[algUpper] {
-		return fmt.Errorf("invalid algorithm: %s. Valid options are MD5, %s, %s", 
+		return fmt.Errorf("invalid algorithm: %s. Valid options are MD5, %s, %s",
 			da.Algorithm, AlgorithmSHA256, AlgorithmSHA512256)
 	}
-	
+
 	// RFC 7616 recommends against using MD5 if stronger algorithms are available
 	if algUpper == "MD5" && da.logger != nil {
-		da.logger.Warn("MD5 algorithm is deprecated for security reasons", 
+		da.logger.Warn("MD5 algorithm is deprecated for security reasons",
 			zap.String("recommendation", "Upgrade to SHA-256 or SHA-512-256"))
 	}
-	
+
 	return nil
 }
 

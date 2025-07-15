@@ -1,6 +1,7 @@
 package caddy_digest_auth
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -57,30 +58,30 @@ func TestDigestAuthModuleInfo(t *testing.T) {
 
 func TestGetAlgorithmForClient(t *testing.T) {
 	da := DigestAuth{Algorithm: AlgorithmSHA256}
-	
+
 	tests := []struct {
 		name        string
 		ctx         *authContext
 		expectedAlg string
 	}{
 		{
-			name: "client specifies valid algorithm",
-			ctx:  &authContext{algorithm: AlgorithmSHA512256},
+			name:        "client specifies valid algorithm",
+			ctx:         &authContext{algorithm: AlgorithmSHA512256},
 			expectedAlg: AlgorithmSHA512256,
 		},
 		{
-			name: "client specifies invalid algorithm",
-			ctx:  &authContext{algorithm: "INVALID"},
+			name:        "client specifies invalid algorithm",
+			ctx:         &authContext{algorithm: "INVALID"},
 			expectedAlg: AlgorithmSHA256, // Should fall back to server's configured algorithm
 		},
 		{
-			name: "no client algorithm specified",
-			ctx:  &authContext{},
+			name:        "no client algorithm specified",
+			ctx:         &authContext{},
 			expectedAlg: AlgorithmSHA256,
 		},
 		{
-			name: "server configured MD5 with client spec",
-			ctx:  &authContext{algorithm: AlgorithmSHA256},
+			name:        "server configured MD5 with client spec",
+			ctx:         &authContext{algorithm: AlgorithmSHA256},
 			expectedAlg: AlgorithmSHA256,
 		},
 	}
@@ -96,17 +97,6 @@ func TestGetAlgorithmForClient(t *testing.T) {
 }
 
 func TestAuthenticationFlows(t *testing.T) {
-	da := DigestAuth{
-		Users: []User{{Username: "testuser", Password: "testpass"}},
-		Realm: "Test Realm",
-	}
-
-	// Provision with test logger
-	ctx := caddy.Context{}
-	err := da.Provision(ctx)
-	if err != nil {
-		t.Fatalf("Provision failed: %v", err)
-	}
 
 	tests := []struct {
 		name          string
@@ -124,39 +114,49 @@ func TestAuthenticationFlows(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runAuthenticationFlowTest(t, &da, tt.serverAlg, tt.clientAlg, tt.shouldSucceed, tt.qop)
+			// Create a new DigestAuth instance for each test to ensure isolation
+			testDA := DigestAuth{
+				Users: []User{{Username: "testuser", Password: "testpass"}},
+				Realm: "Test Realm",
+			}
+
+			// Provision with the specific algorithm for this test case
+			testDA.Algorithm = tt.serverAlg
+			testCaddyCtx := caddy.Context{}
+			err := testDA.Provision(testCaddyCtx)
+			if err != nil {
+				t.Fatalf("Provision failed for %s: %v", tt.name, err)
+			}
+
+			nonce, nonceData, err := testDA.generateNonce()
+			if err != nil {
+				t.Fatalf("Failed to generate nonce: %v", err)
+			}
+
+			authCtx := &authContext{
+				user:      "testuser",
+				realm:     "Test Realm",
+				nonce:     nonce,
+				uri:       "/protected",
+				method:    "GET",
+				algorithm: tt.clientAlg,
+				qop:       tt.qop,
+				nc:        "00000001",
+				cnonce:    "abcdef0123456789",
+				opaque:    nonceData.Opaque,
+			}
+
+			// Calculate HA1 dynamically based on the server's algorithm for the test user
+			testUserHA1 := testDA.digestHash(testDA.getAlgorithmForClient(authCtx), fmt.Sprintf("%s:%s:%s", "testuser", "Test Realm", "testpass"))
+			cred := credential{HA1: testUserHA1, Realm: "Test Realm"}
+			expectedResponse := testDA.calculateExpectedResponse(authCtx, cred)
+			authCtx.response = expectedResponse
+
+			valid, _ := testDA.verify(authCtx, "127.0.0.1", zap.NewNop())
+			if valid != tt.shouldSucceed {
+				t.Errorf("Test %s failed: expected %v, got %v", t.Name(), tt.shouldSucceed, valid)
+			}
 		})
-	}
-}
-
-func runAuthenticationFlowTest(t *testing.T, da *DigestAuth, serverAlg, clientAlg string, shouldSucceed bool, qop string) {
-	da.Algorithm = serverAlg
-
-	nonce, nonceData, err := da.generateNonce()
-	if err != nil {
-		t.Fatalf("Failed to generate nonce: %v", err)
-	}
-
-	ctx := &authContext{
-		user:      "testuser",
-		realm:     "Test Realm",
-		nonce:     nonce,
-		uri:       "/protected",
-		method:    "GET",
-		algorithm: clientAlg,
-		qop:       qop,
-		nc:        "00000001",
-		cnonce:    "abcdef0123456789",
-		opaque:    nonceData.Opaque,
-	}
-
-	cred := credential{Password: "testpass"}
-	expectedResponse := da.calculateExpectedResponse(ctx, cred)
-	ctx.response = expectedResponse
-
-	valid, _ := da.verify(ctx, "127.0.0.1", zap.NewNop())
-	if valid != shouldSucceed {
-		t.Errorf("Test %s failed: expected %v, got %v", t.Name(), shouldSucceed, valid)
 	}
 }
 
@@ -183,7 +183,7 @@ func TestDigestAuthProvision(t *testing.T) {
 	if da.Expires == 0 {
 		t.Error("Expected expires to be set to default")
 	}
-	
+
 	// Verify algorithm defaulting
 	if da.Algorithm != "" {
 		t.Errorf("Expected empty algorithm to default to MD5, got '%s'", da.Algorithm)
@@ -191,7 +191,7 @@ func TestDigestAuthProvision(t *testing.T) {
 
 	// Test MD5 warning
 	daMD5 := DigestAuth{
-		Users: []User{{Username: "test", Password: "test"}},
+		Users:     []User{{Username: "test", Password: "test"}},
 		Algorithm: "MD5",
 	}
 	err = daMD5.Provision(ctx)
