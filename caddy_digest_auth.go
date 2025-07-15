@@ -70,8 +70,8 @@ type User struct {
 
 // credential represents a user's digest authentication credentials
 type credential struct {
-	Realm     string `json:"realm"`
-	Password  string `json:"password"`  // Store actual password for algorithm flexibility
+	Realm string `json:"realm"`
+	HA1   string `json:"ha1"` // Store HA1 hash for digest authentication
 }
 
 // nonceData stores nonce metadata for validation and replay protection
@@ -358,9 +358,12 @@ func (da *DigestAuth) loadInlineUsers() error {
 		if user.Username == "" || user.Password == "" {
 			return fmt.Errorf("username and password are required for inline users")
 		}
+		// For inline users, calculate HA1 on the fly.
+		// This assumes the provided password is the plain text password.
+		ha1 := da.digestHash("MD5", fmt.Sprintf("%s:%s:%s", user.Username, da.Realm, user.Password))
 		da.credentials[user.Username] = credential{
-			Realm:    da.Realm,
-			Password: user.Password,
+			Realm: da.Realm,
+			HA1:   ha1,
 		}
 	}
 
@@ -410,7 +413,7 @@ func (da *DigestAuth) processUserFileLine(line string, lineNum int) (loaded int,
 		return 0, 1, err
 	}
 
-	da.credentials[username] = credential{Realm: realm, Password: md5hash}
+	da.credentials[username] = credential{Realm: realm, HA1: md5hash}
 	return 1, 0, nil
 }
 
@@ -451,7 +454,7 @@ func (da *DigestAuth) parseUserFileLine(line string, lineNum int) (string, strin
 		return "", "", "", true, nil
 	}
 
-	return username, realm, md5hash, false, nil // Note: md5hash is stored in Password field for MD5 compatibility
+	return username, realm, md5hash, false, nil // Note: md5hash is now stored in HA1 field
 }
 
 // generateNonce creates a new nonce with all required components
@@ -771,8 +774,8 @@ func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credentia
 	effectiveRealm := strings.Trim(ctx.realm, `"`)
 	
 	// Calculate hashes with proper encoding
-	ha1 := da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s",
-		ctx.user, effectiveRealm, cred.Password))
+	// HA1 is already pre-calculated and stored in credentials
+	ha1 := cred.HA1
 	ha2 := da.digestHash(algorithm, fmt.Sprintf("%s:%s",
 		ctx.method, ctx.uri))
 
