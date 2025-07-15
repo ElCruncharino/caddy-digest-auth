@@ -759,16 +759,37 @@ func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credentia
 	encodedUser := url.PathEscape(ctx.user)
 	
 	// Calculate hashes with proper encoding
-	ha1 := da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s", 
+	ha1 := da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s",
 		encodedUser, effectiveRealm, cred.Password))
-	ha2 := da.digestHash(algorithm, fmt.Sprintf("%s:%s", 
+	ha2 := da.digestHash(algorithm, fmt.Sprintf("%s:%s",
 		ctx.method, url.PathEscape(ctx.uri)))
 
+	var response string
 	if ctx.qop != "" {
-		return da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s:%s:%s:%s",
+		response = da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s:%s:%s:%s",
 			ha1, ctx.nonce, ctx.nc, ctx.cnonce, ctx.qop, ha2))
+	} else {
+		response = da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s", ha1, ctx.nonce, ha2))
 	}
-	return da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s", ha1, ctx.nonce, ha2))
+
+	if da.logger != nil {
+		da.logger.Debug("calculating expected response",
+			zap.String("algorithm", algorithm),
+			zap.String("username", ctx.user),
+			zap.String("realm", effectiveRealm),
+			zap.String("nonce", ctx.nonce),
+			zap.String("uri", ctx.uri),
+			zap.String("method", ctx.method),
+			zap.String("qop", ctx.qop),
+			zap.String("nc", ctx.nc),
+			zap.String("cnonce", ctx.cnonce),
+			zap.String("HA1", ha1),
+			zap.String("HA2", ha2),
+			zap.String("expected_response", response),
+		)
+	}
+
+	return response
 }
 
 // validateNonce checks if a nonce is valid and not stale
@@ -830,20 +851,31 @@ func (da *DigestAuth) digestHash(algorithm string, input string) string {
 
 // getAlgorithmForClient determines the best algorithm based on client capabilities
 func (da *DigestAuth) getAlgorithmForClient(ctx *authContext) string {
-	// Prefer client-specified algorithm if valid
+	// If client specifies an algorithm, and it's one we support, use it.
+	// Otherwise, fall back to server's configured algorithm.
 	if ctx.algorithm != "" {
-		switch strings.ToUpper(ctx.algorithm) {
+		clientAlgUpper := strings.ToUpper(ctx.algorithm)
+		switch clientAlgUpper {
 		case AlgorithmSHA256, AlgorithmSHA512256, "MD5":
-			return strings.ToUpper(ctx.algorithm)
+			return clientAlgUpper
+		default:
+			// Client specified an unsupported algorithm, log and fall back to server's config
+			if da.logger != nil {
+				da.logger.Warn("client requested unsupported algorithm, falling back to server configuration",
+					zap.String("client_algorithm", ctx.algorithm),
+					zap.String("server_algorithm", da.Algorithm))
+			}
 		}
 	}
-	
-	// Fall back to server configuration
-	switch strings.ToUpper(da.Algorithm) {
+
+	// Use server's configured algorithm
+	serverAlgUpper := strings.ToUpper(da.Algorithm)
+	switch serverAlgUpper {
 	case AlgorithmSHA256, AlgorithmSHA512256:
-		return da.Algorithm
+		return serverAlgUpper
 	default:
-		return "MD5" // Final fallback to RFC 2617
+		// Default to MD5 if server algorithm is not specified or unsupported
+		return "MD5"
 	}
 }
 

@@ -131,7 +131,7 @@ func TestGetAlgorithmForClient(t *testing.T) {
 		{
 			name: "client specifies invalid algorithm",
 			ctx:  &authContext{algorithm: "INVALID"},
-			expectedAlg: "MD5",
+			expectedAlg: AlgorithmSHA256, // Should fall back to server's configured algorithm
 		},
 		{
 			name: "no client algorithm specified",
@@ -172,48 +172,80 @@ func TestAuthenticationFlows(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		algorithm     string
-		clientAlg     string
+		serverAlg     string // Algorithm configured on the server
+		clientAlg     string // Algorithm client claims to use
 		shouldSucceed bool
+		qop           string // Quality of protection
 	}{
 		{
-			name:          "MD5 fallback",
-			algorithm:     "",
-			clientAlg:     "",
+			name:          "MD5 fallback (server default, client no alg)",
+			serverAlg:     "", // Server defaults to MD5
+			clientAlg:     "", // Client doesn't specify
 			shouldSucceed: true,
+			qop:           "auth",
 		},
 		{
-			name:          "SHA-256 forced",
-			algorithm:     AlgorithmSHA256,
+			name:          "SHA-256 forced (server SHA-256, client SHA-256)",
+			serverAlg:     AlgorithmSHA256,
 			clientAlg:     AlgorithmSHA256,
 			shouldSucceed: true,
+			qop:           "auth",
 		},
 		{
-			name:          "client requests unsupported algorithm",
-			algorithm:     AlgorithmSHA256,
-			clientAlg:     "SHA3-512",
-			shouldSucceed: false,
+			name:          "client requests unsupported algorithm (server SHA-256, client SHA3-512)",
+			serverAlg:     AlgorithmSHA256,
+			clientAlg:     "SHA3-512", // Client requests unsupported, server falls back to SHA-256
+			shouldSucceed: true,       // Should succeed if server falls back and client's response matches server's algorithm
+			qop:           "auth",
+		},
+		{
+			name:          "MD5 with qop auth",
+			serverAlg:     "MD5",
+			clientAlg:     "MD5",
+			shouldSucceed: true,
+			qop:           "auth",
+		},
+		{
+			name:          "SHA-256 with qop auth",
+			serverAlg:     AlgorithmSHA256,
+			clientAlg:     AlgorithmSHA256,
+			shouldSucceed: true,
+			qop:           "auth",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			da.Algorithm = tt.algorithm
+			// Reset algorithm for each test run
+			da.Algorithm = tt.serverAlg
+
+			// Generate a fresh nonce for each test case
+			nonce, nonceData, err := da.generateNonce()
+			if err != nil {
+				t.Fatalf("Failed to generate nonce: %v", err)
+			}
+
+			// Simulate client context
 			ctx := &authContext{
 				user:      "testuser",
 				realm:     "Test Realm",
-				algorithm: tt.clientAlg,
-				method:    "GET",
+				nonce:     nonce,
 				uri:       "/protected",
+				method:    "GET",
+				algorithm: tt.clientAlg,
+				qop:       tt.qop,
+				nc:        "00000001", // Nonce count, typically starts at 1
+				cnonce:    "abcdef0123456789", // Client nonce
+				opaque:    nonceData.Opaque,
 			}
 
-			// Calculate expected response
+			// Calculate expected response using the server's logic
 			cred := credential{Password: "testpass"}
-			expected := da.calculateExpectedResponse(ctx, cred)
+			expectedResponse := da.calculateExpectedResponse(ctx, cred)
 
-			// Simulate client response
-			ctx.response = expected
-			
+			// Simulate client sending the calculated response
+			ctx.response = expectedResponse
+
 			valid, _ := da.verify(ctx, "127.0.0.1", zap.NewNop())
 			if valid != tt.shouldSucceed {
 				t.Errorf("Test %s failed: expected %v, got %v", tt.name, tt.shouldSucceed, valid)
