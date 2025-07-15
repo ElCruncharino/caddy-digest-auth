@@ -18,7 +18,7 @@ func TestDigestAuthValidation(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid inline users",
+			name: "valid inline users SHA-256",
 			config: DigestAuth{
 				Users: []User{
 					{Username: "admin", Password: "password"},
@@ -26,6 +26,35 @@ func TestDigestAuthValidation(t *testing.T) {
 				Algorithm: AlgorithmSHA256,
 			},
 			wantErr: false,
+		},
+		{
+			name: "valid inline users SHA-512-256",
+			config: DigestAuth{
+				Users: []User{
+					{Username: "admin", Password: "password"},
+				},
+				Algorithm: AlgorithmSHA512256,
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid default MD5 algorithm",
+			config: DigestAuth{
+				Users: []User{
+					{Username: "admin", Password: "password"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid algorithm",
+			config: DigestAuth{
+				Users: []User{
+					{Username: "admin", Password: "password"},
+				},
+				Algorithm: "SHA3-256",
+			},
+			wantErr: true,
 		},
 		{
 			name: "valid user file",
@@ -97,5 +126,10 @@ func TestDigestAuthProvision(t *testing.T) {
 
 	if da.Expires == 0 {
 		t.Error("Expected expires to be set to default")
+	}
+	
+	// Verify algorithm defaulting
+	if da.Algorithm != "" {
+		t.Errorf("Expected empty algorithm to default to MD5, got '%s'", da.Algorithm)
 	}
 }
