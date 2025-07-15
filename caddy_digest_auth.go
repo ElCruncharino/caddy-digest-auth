@@ -31,6 +31,12 @@ func init() {
 	httpcaddyfile.RegisterHandlerDirective("digest_auth", parseCaddyfileDigestAuth)
 }
 
+// Algorithm constants
+const (
+	AlgorithmSHA256      = "SHA-256"
+	AlgorithmSHA512256   = "SHA-512-256"
+)
+
 // DigestAuth implements HTTP Digest Authentication for Caddy
 type DigestAuth struct {
 	// Configuration fields
@@ -796,10 +802,10 @@ func (da *DigestAuth) digestHash(algorithm string, input string) string {
 	inputBytes := []byte(input)
 	
 	switch algorithm {
-	case "SHA-256":
+	case AlgorithmSHA256:
 		hash := sha256.Sum256(inputBytes)
 		return fmt.Sprintf("%x", hash)
-	case "SHA-512-256":
+	case AlgorithmSHA512256:
 		hash := sha512.Sum512_256(inputBytes)
 		return fmt.Sprintf("%x", hash)
 	default: // MD5 (RFC 2617)
@@ -811,7 +817,7 @@ func (da *DigestAuth) digestHash(algorithm string, input string) string {
 // getAlgorithm returns validated algorithm
 func (da *DigestAuth) getAlgorithm() string {
 	switch strings.ToUpper(da.Algorithm) {
-	case "SHA-256", "SHA-512-256":
+	case AlgorithmSHA256, AlgorithmSHA512256:
 		return da.Algorithm
 	default:
 		return "MD5" // Default to RFC 2617
@@ -915,13 +921,13 @@ func (da *DigestAuth) validateAlgorithm() error {
 	}
 	
 	validAlgorithms := map[string]bool{
-		"MD5":         true,
-		"SHA-256":     true,
-		"SHA-512-256": true,
+		"MD5":             true,
+		AlgorithmSHA256:   true,
+		AlgorithmSHA512256: true,
 	}
 	
 	if !validAlgorithms[strings.ToUpper(da.Algorithm)] {
-		return fmt.Errorf("invalid algorithm: %s. Valid options are MD5, SHA-256, SHA-512-256", da.Algorithm)
+		return fmt.Errorf("invalid algorithm: %s. Valid options are MD5, %s, %s", da.Algorithm, AlgorithmSHA256, AlgorithmSHA512256)
 	}
 	return nil
 }
