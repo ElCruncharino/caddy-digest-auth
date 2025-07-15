@@ -250,6 +250,7 @@ echo "User $USERNAME added successfully"
 example.com {
     digest_auth {
         realm "My Site"
+        algorithm SHA-256
         users {
             admin "secure_password"
         }
@@ -263,6 +264,7 @@ example.com {
 example.com {
     digest_auth {
         realm "Protected Area"
+        algorithm SHA-512-256
         users {
             admin "admin123"
             user "user123"
@@ -279,6 +281,7 @@ example.com {
 enterprise.example.com {
     digest_auth {
         realm "Enterprise Portal"
+        algorithm SHA-512-256
         user_file /etc/caddy/enterprise_users.json
         exclude_paths /public/* /health /metrics /api/status /docs/*
         expires 1800
@@ -303,6 +306,7 @@ example.com {
     handle /admin/* {
         digest_auth {
             realm "Admin Area"
+            algorithm SHA-256
             users {
                 admin "admin123"
             }
