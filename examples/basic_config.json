@@ -10,6 +10,7 @@
                 {
                   "handler": "digest_auth",
                   "realm": "Protected Area",
+                  "algorithm": "SHA-256",  // Valid options: MD5, SHA-256, SHA-512-256
                   "users": [
                     {
                       "username": "admin",

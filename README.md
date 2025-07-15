@@ -10,7 +10,8 @@ A custom Caddy v2 module that provides HTTP Digest Authentication support for Ca
 
 ## Features
 
-- **HTTP Digest Authentication** - RFC 2617 compliant digest authentication
+- **HTTP Digest Authentication** - RFC 2617 and RFC 7616 compliant
+- **Multiple Algorithms** - Support for MD5, SHA-256, and SHA-512-256
 - **Flexible Configuration** - Support for multiple users and realms
 - **Path Exclusion** - Exclude specific paths from authentication
 - **Caddy v2 Integration** - Native Caddy module with Caddyfile support
@@ -130,6 +131,7 @@ htdigest users.htdigest "Protected Area" user1
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
 | `realm` | string | Authentication realm | "Protected Area" |
+| `algorithm` | string | Hash algorithm (MD5, SHA-256, SHA-512-256) | "MD5" |
 | `users` | block | Inline user configuration | - |
 | `user_file` | string | Path to user file (.json or htdigest) | - |
 | `exclude_paths` | array | Paths to exclude from auth | [] |
