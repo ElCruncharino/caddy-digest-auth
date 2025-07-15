@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -755,14 +754,11 @@ func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credentia
 	// RFC 7616 requires supporting both quoted and unquoted realm values
 	effectiveRealm := strings.Trim(ctx.realm, `"`)
 	
-	// Handle username encoding per RFC 7616 section 3.3
-	encodedUser := url.PathEscape(ctx.user)
-	
 	// Calculate hashes with proper encoding
 	ha1 := da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s",
-		encodedUser, effectiveRealm, cred.Password))
+		ctx.user, effectiveRealm, cred.Password))
 	ha2 := da.digestHash(algorithm, fmt.Sprintf("%s:%s",
-		ctx.method, url.PathEscape(ctx.uri)))
+		ctx.method, ctx.uri))
 
 	var response string
 	if ctx.qop != "" {
