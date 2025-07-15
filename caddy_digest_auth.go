@@ -512,7 +512,9 @@ func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool, logger *z
 	if algorithm == "" {
 		algorithm = "MD5" // Default to RFC 2617 compatibility
 	}
-	challenge := fmt.Sprintf(`Digest realm="%s", charset="UTF-8", algorithm=%s, qop="auth", nonce="%s", opaque="%s"`,
+	// RFC 7616 requires UTF-8 and allows multiple quality of protection options
+	challenge := fmt.Sprintf(
+		`Digest realm="%s", charset="UTF-8", algorithm=%s, qop="auth,auth-int", nonce="%s", opaque="%s"`,
 		da.Realm, algorithm, nonce, nonceData.Opaque)
 
 	if stale {
@@ -747,8 +749,17 @@ func (da *DigestAuth) validateResponseHash(ctx *authContext, cred credential, re
 func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credential) string {
 	// Support RFC 7616 algorithms
 	algorithm := da.getAlgorithm()
-	ha1 := da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s", ctx.user, ctx.realm, cred.Password))
-	ha2 := da.digestHash(algorithm, fmt.Sprintf("%s:%s", ctx.method, ctx.uri))
+	// RFC 7616 requires supporting both quoted and unquoted realm values
+	effectiveRealm := strings.Trim(ctx.realm, `"`)
+	
+	// Handle username encoding per RFC 7616 section 3.3
+	encodedUser := url.PathEscape(ctx.user)
+	
+	// Calculate hashes with proper encoding
+	ha1 := da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s", 
+		encodedUser, effectiveRealm, cred.Password))
+	ha2 := da.digestHash(algorithm, fmt.Sprintf("%s:%s", 
+		ctx.method, url.PathEscape(ctx.uri)))
 
 	if ctx.qop != "" {
 		return da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s:%s:%s:%s",
@@ -814,13 +825,22 @@ func (da *DigestAuth) digestHash(algorithm string, input string) string {
 	}
 }
 
-// getAlgorithm returns validated algorithm
-func (da *DigestAuth) getAlgorithm() string {
+// getAlgorithmForClient determines the best algorithm based on client capabilities
+func (da *DigestAuth) getAlgorithmForClient(ctx *authContext) string {
+	// Prefer client-specified algorithm if valid
+	if ctx.algorithm != "" {
+		switch strings.ToUpper(ctx.algorithm) {
+		case AlgorithmSHA256, AlgorithmSHA512256, "MD5":
+			return strings.ToUpper(ctx.algorithm)
+		}
+	}
+	
+	// Fall back to server configuration
 	switch strings.ToUpper(da.Algorithm) {
 	case AlgorithmSHA256, AlgorithmSHA512256:
 		return da.Algorithm
 	default:
-		return "MD5" // Default to RFC 2617
+		return "MD5" // Final fallback to RFC 2617
 	}
 }
 
@@ -915,7 +935,7 @@ func (da *DigestAuth) Validate() error {
 }
 
 func (da *DigestAuth) validateAlgorithm() error {
-	// Empty algorithm is valid (defaults to MD5)
+	// Empty algorithm is valid (will auto-detect from client)
 	if da.Algorithm == "" {
 		return nil
 	}
@@ -926,9 +946,18 @@ func (da *DigestAuth) validateAlgorithm() error {
 		AlgorithmSHA512256: true,
 	}
 	
-	if !validAlgorithms[strings.ToUpper(da.Algorithm)] {
-		return fmt.Errorf("invalid algorithm: %s. Valid options are MD5, %s, %s", da.Algorithm, AlgorithmSHA256, AlgorithmSHA512256)
+	algUpper := strings.ToUpper(da.Algorithm)
+	if !validAlgorithms[algUpper] {
+		return fmt.Errorf("invalid algorithm: %s. Valid options are MD5, %s, %s", 
+			da.Algorithm, AlgorithmSHA256, AlgorithmSHA512256)
 	}
+	
+	// RFC 7616 recommends against using MD5 if stronger algorithms are available
+	if algUpper == "MD5" {
+		da.logger.Warn("MD5 algorithm is deprecated for security reasons", 
+			zap.String("recommendation", "Upgrade to SHA-256 or SHA-512-256"))
+	}
+	
 	return nil
 }
 
