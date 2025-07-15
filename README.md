@@ -60,43 +60,7 @@ example.com {
 }
 ```
 
-### 2. JSON User File (Recommended for large numbers)
-
-Ideal for sites with many users (10-1000+):
-
-```caddy
-large-site.example.com {
-    digest_auth {
-        realm "Protected Area"
-        user_file /etc/caddy/users.json
-        exclude_paths /public/* /health /metrics
-    }
-    
-    reverse_proxy localhost:8080
-}
-```
-
-**JSON User File Format** (`/etc/caddy/users.json`):
-```json
-[
-  {
-    "username": "admin",
-    "password": "admin123"
-  },
-  {
-    "username": "user1",
-    "password": "password1"
-  },
-  {
-    "username": "user2",
-    "password": "password2"
-  }
-]
-// Note: When using SHA-256 or SHA-512-256 algorithms, passwords are stored
-// in plaintext and hashed during authentication
-```
-
-### 3. htdigest File (Traditional approach)
+### 2. htdigest File (Traditional approach)
 
 Compatible with Apache/nginx htdigest files:
 
@@ -135,7 +99,7 @@ htdigest users.htdigest "Protected Area" user1
 | `realm` | string | Authentication realm | "Protected Area" |
 | `algorithm` | string | Hash algorithm (MD5, SHA-256, SHA-512-256) | "MD5" |
 | `users` | block | Inline user configuration | - |
-| `user_file` | string | Path to user file (.json or htdigest) | - |
+| `user_file` | string | Path to htdigest user file | - |
 | `exclude_paths` | array | Paths to exclude from auth | [] |
 | `expires` | int | Nonce expiration in seconds | 600 |
 | `replays` | int | Max nonce reuses | 500 |
@@ -214,34 +178,15 @@ Metrics are available through the module's internal state and can be exposed via
 | Approach | Best For | Pros | Cons |
 |----------|----------|------|------|
 | **Inline Users** | 1-10 users | Simple, no external files | Hard to manage many users |
-| **JSON File** | 10-1000+ users | Easy to manage, readable | Requires file management |
 | **htdigest File** | Legacy compatibility | Apache/nginx compatible | Less readable format |
 
 ### Managing Large User Lists
 
 For sites with hundreds or thousands of users:
 
-1. **Use JSON files** for easy management
-2. **Automate user creation** with scripts
-3. **Use version control** for user files
-4. **Implement proper file permissions** (600 for user files)
-
-Example JSON user management script:
-```bash
-#!/bin/bash
-# add_user.sh - Add a new user to JSON file
-
-USERNAME=$1
-PASSWORD=$2
-USERFILE="/etc/caddy/users.json"
-
-# Add user to JSON file
-jq --arg user "$USERNAME" --arg pass "$PASSWORD" \
-   '. += [{"username": $user, "password": $pass}]' \
-   "$USERFILE" > "$USERFILE.tmp" && mv "$USERFILE.tmp" "$USERFILE"
-
-echo "User $USERNAME added successfully"
-```
+1. **Automate htdigest user creation** with scripts
+2. **Use version control** for user files
+3. **Implement proper file permissions** (600 for user files)
 
 ## Examples
 
@@ -282,7 +227,7 @@ enterprise.example.com {
     digest_auth {
         realm "Enterprise Portal"
         algorithm SHA-512-256
-        user_file /etc/caddy/enterprise_users.json
+        user_file /etc/caddy/enterprise_users.htdigest
         exclude_paths /public/* /health /metrics /api/status /docs/*
         expires 1800
         replays 1000
@@ -369,9 +314,18 @@ log {
 - Use `exclude_paths` to avoid authentication on public resources
 - For large deployments, consider using external user files for better security management
 - Implement proper file permissions on user files:
-  - 644 for JSON files
   - 600 for htdigest files
 - Store user files outside of web-accessible directories
+
+## Algorithm Compatibility
+
+The `HA1` hash (MD5(username:realm:password) or SHA-256(username:realm:password), etc.) is a crucial component in Digest Authentication. This module handles `HA1` differently based on how user credentials are provided:
+
+- **Inline Users (`users` array in Caddyfile):**
+  When you define users directly in your Caddyfile with plaintext passwords, the module calculates the `HA1` hash on the fly using the `algorithm` specified in your `digest_auth` block (e.g., `SHA-256`, `SHA-512-256`, or `MD5` by default). This means you can use stronger algorithms with inline users.
+
+- **htdigest File (`user_file` option):**
+  The `htdigest` file format inherently stores `HA1` hashes as MD5. Therefore, if you use a `user_file` to load credentials, the module will always treat the `HA1` values from that file as MD5 hashes, regardless of the `algorithm` setting in your Caddyfile. If your `htdigest` file contains hashes generated with a different algorithm, authentication will fail.
 
 ## Development
 
