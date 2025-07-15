@@ -8,6 +8,7 @@ example.com {
     # Basic digest authentication with inline users
     digest_auth {
         realm "Protected Area"
+        algorithm SHA-256  # Valid options: MD5, SHA-256, SHA-512-256
         users {
             admin "your_secure_password"
             user "user123"
