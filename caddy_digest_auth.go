@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -585,6 +586,7 @@ func (da *DigestAuth) assignAuthValue(key, value string, ctx *authContext) {
 		"cnonce":   func(v string) { ctx.cnonce = v },
 		"opaque":   func(v string) { ctx.opaque = v },
 		"method":   func(v string) { ctx.method = v },
+		"algorithm": func(v string) { ctx.algorithm = v },
 	}
 
 	if handler, exists := keyHandlers[key]; exists {
@@ -627,16 +629,17 @@ func hasInvalidQop(ctx *authContext) bool {
 
 // authContext holds parsed authentication data
 type authContext struct {
-	user     string
-	realm    string
-	nonce    string
-	uri      string
-	response string
-	qop      string
-	nc       string
-	cnonce   string
-	opaque   string
-	method   string
+	user      string
+	realm     string
+	nonce     string
+	uri       string
+	response  string
+	qop       string
+	nc        string
+	cnonce    string
+	opaque    string
+	method    string
+	algorithm string
 }
 
 // verify validates the authentication response
@@ -748,7 +751,7 @@ func (da *DigestAuth) validateResponseHash(ctx *authContext, cred credential, re
 
 func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credential) string {
 	// Support RFC 7616 algorithms
-	algorithm := da.getAlgorithm()
+	algorithm := da.getAlgorithmForClient(ctx)
 	// RFC 7616 requires supporting both quoted and unquoted realm values
 	effectiveRealm := strings.Trim(ctx.realm, `"`)
 	
