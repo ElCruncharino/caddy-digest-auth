@@ -545,6 +545,22 @@ func (da *DigestAuth) parseAuthHeader(header string, method string) (*authContex
 		return nil, err
 	}
 
+	if da.logger != nil {
+		da.logger.Debug("parsed authorization header",
+			zap.String("username", ctx.user),
+			zap.String("realm", ctx.realm),
+			zap.String("nonce", ctx.nonce),
+			zap.String("uri", ctx.uri),
+			zap.String("response", ctx.response),
+			zap.String("qop", ctx.qop),
+			zap.String("nc", ctx.nc),
+			zap.String("cnonce", ctx.cnonce),
+			zap.String("opaque", ctx.opaque),
+			zap.String("method", ctx.method),
+			zap.String("algorithm", ctx.algorithm),
+		)
+	}
+
 	return ctx, nil
 }
 
