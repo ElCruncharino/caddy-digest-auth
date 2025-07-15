@@ -114,6 +114,116 @@ func TestDigestAuthModuleInfo(t *testing.T) {
 	}
 }
 
+func TestGetAlgorithmForClient(t *testing.T) {
+	da := DigestAuth{Algorithm: AlgorithmSHA256}
+	
+	tests := []struct {
+		name        string
+		ctx         *authContext
+		expectedAlg string
+	}{
+		{
+			name: "client specifies valid algorithm",
+			ctx:  &authContext{algorithm: AlgorithmSHA512256},
+			expectedAlg: AlgorithmSHA512256,
+		},
+		{
+			name: "client specifies invalid algorithm",
+			ctx:  &authContext{algorithm: "INVALID"},
+			expectedAlg: "MD5",
+		},
+		{
+			name: "no client algorithm specified",
+			ctx:  &authContext{},
+			expectedAlg: AlgorithmSHA256,
+		},
+		{
+			name: "server configured MD5 with client spec",
+			ctx:  &authContext{algorithm: AlgorithmSHA256},
+			expectedAlg: AlgorithmSHA256,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := da.getAlgorithmForClient(tt.ctx)
+			if result != tt.expectedAlg {
+				t.Errorf("Expected algorithm %s, got %s", tt.expectedAlg, result)
+			}
+		})
+	}
+}
+
+func TestAuthenticationFlows(t *testing.T) {
+	da := DigestAuth{
+		Users: []User{
+			{Username: "testuser", Password: "testpass"},
+		},
+		Realm: "Test Realm",
+	}
+	
+	// Provision with test logger
+	ctx := caddy.Context{}
+	err := da.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		algorithm     string
+		clientAlg     string
+		shouldSucceed bool
+	}{
+		{
+			name:          "MD5 fallback",
+			algorithm:     "",
+			clientAlg:     "",
+			shouldSucceed: true,
+		},
+		{
+			name:          "SHA-256 forced",
+			algorithm:     AlgorithmSHA256,
+			clientAlg:     AlgorithmSHA256,
+			shouldSucceed: true,
+		},
+		{
+			name:          "client requests unsupported algorithm",
+			algorithm:     AlgorithmSHA256,
+			clientAlg:     "SHA3-512",
+			shouldSucceed: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			da.Algorithm = tt.algorithm
+			ctx := &authContext{
+				user:      "testuser",
+				realm:     "Test Realm",
+				algorithm: tt.clientAlg,
+				method:    "GET",
+				uri:       "/protected",
+			}
+
+			// Get expected algorithm
+			alg := da.getAlgorithmForClient(ctx)
+			
+			// Calculate expected response
+			cred := credential{Password: "testpass"}
+			expected := da.calculateExpectedResponse(ctx, cred)
+
+			// Simulate client response
+			ctx.response = expected
+			
+			valid, _ := da.verify(ctx, "127.0.0.1", zap.NewNop())
+			if valid != tt.shouldSucceed {
+				t.Errorf("Test %s failed: expected %v, got %v", tt.name, tt.shouldSucceed, valid)
+			}
+		})
+	}
+}
+
 func TestDigestAuthProvision(t *testing.T) {
 	da := DigestAuth{
 		Users: []User{
@@ -141,5 +251,15 @@ func TestDigestAuthProvision(t *testing.T) {
 	// Verify algorithm defaulting
 	if da.Algorithm != "" {
 		t.Errorf("Expected empty algorithm to default to MD5, got '%s'", da.Algorithm)
+	}
+
+	// Test MD5 warning
+	daMD5 := DigestAuth{
+		Users: []User{{Username: "test", Password: "test"}},
+		Algorithm: "MD5",
+	}
+	err = daMD5.Provision(ctx)
+	if err != nil {
+		t.Errorf("Provision with MD5 failed: %v", err)
 	}
 }
