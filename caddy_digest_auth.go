@@ -35,6 +35,7 @@ type DigestAuth struct {
 	Realm           string   `json:"realm,omitempty"`
 	UserFile        string   `json:"user_file,omitempty"`
 	Users           []User   `json:"users,omitempty"`             // Inline user credentials
+	Algorithm       string   `json:"algorithm,omitempty"`         // MD5 (default), SHA-256, SHA-512-256
 	ExcludePaths    []string `json:"exclude_paths,omitempty"`     // Paths that don't require authentication
 	Expires         int      `json:"expires,omitempty"`           // Nonce expiration in seconds
 	Replays         int      `json:"replays,omitempty"`           // Max nonce reuses
@@ -499,8 +500,13 @@ func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool, logger *z
 		return nil
 	}
 
-	challenge := fmt.Sprintf(`Digest realm="%s", qop="auth", algorithm=MD5, nonce="%s", opaque="%s"`,
-		da.Realm, nonce, nonceData.Opaque)
+	// RFC 7616 requires UTF-8 and algorithm in challenge
+	algorithm := da.Algorithm
+	if algorithm == "" {
+		algorithm = "MD5" // Default to RFC 2617 compatibility
+	}
+	challenge := fmt.Sprintf(`Digest realm="%s", charset="UTF-8", algorithm=%s, qop="auth", nonce="%s", opaque="%s"`,
+		da.Realm, algorithm, nonce, nonceData.Opaque)
 
 	if stale {
 		challenge += ", stale=true"
@@ -732,14 +738,16 @@ func (da *DigestAuth) validateResponseHash(ctx *authContext, cred credential, re
 }
 
 func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credential) string {
-	ha1 := cred.Cipher
-	ha2 := da.md5Hash(fmt.Sprintf("%s:%s", ctx.method, ctx.uri))
+	// Support RFC 7616 algorithms
+	algorithm := da.getAlgorithm()
+	ha1 := da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s", ctx.user, ctx.realm, cred.Password))
+	ha2 := da.digestHash(algorithm, fmt.Sprintf("%s:%s", ctx.method, ctx.uri))
 
 	if ctx.qop != "" {
-		return da.md5Hash(fmt.Sprintf("%s:%s:%s:%s:%s:%s",
+		return da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s:%s:%s:%s",
 			ha1, ctx.nonce, ctx.nc, ctx.cnonce, ctx.qop, ha2))
 	}
-	return da.md5Hash(fmt.Sprintf("%s:%s:%s", ha1, ctx.nonce, ha2))
+	return da.digestHash(algorithm, fmt.Sprintf("%s:%s:%s", ha1, ctx.nonce, ha2))
 }
 
 // validateNonce checks if a nonce is valid and not stale
@@ -782,10 +790,31 @@ func (da *DigestAuth) validateNonce(nonce string) (bool, *nonceData) {
 	return false, nonceData
 }
 
-// md5Hash calculates MD5 hash of a string
-func (da *DigestAuth) md5Hash(input string) string {
-	hash := md5.Sum([]byte(input))
-	return fmt.Sprintf("%x", hash)
+// digestHash calculates hash using configured algorithm
+func (da *DigestAuth) digestHash(algorithm string, input string) string {
+	inputBytes := []byte(input)
+	
+	switch algorithm {
+	case "SHA-256":
+		hash := sha256.Sum256(inputBytes)
+		return fmt.Sprintf("%x", hash)
+	case "SHA-512-256":
+		hash := sha512.Sum512_256(inputBytes)
+		return fmt.Sprintf("%x", hash)
+	default: // MD5 (RFC 2617)
+		hash := md5.Sum(inputBytes)
+		return fmt.Sprintf("%x", hash)
+	}
+}
+
+// getAlgorithm returns validated algorithm
+func (da *DigestAuth) getAlgorithm() string {
+	switch strings.ToUpper(da.Algorithm) {
+	case "SHA-256", "SHA-512-256":
+		return da.Algorithm
+	default:
+		return "MD5" // Default to RFC 2617
+	}
 }
 
 // isRateLimited checks if a client is rate limited
@@ -872,7 +901,23 @@ func (da *DigestAuth) Validate() error {
 	if err := da.validateUserFile(); err != nil {
 		return err
 	}
+	if err := da.validateAlgorithm(); err != nil {
+		return err
+	}
 	return da.validateInlineUsers()
+}
+
+func (da *DigestAuth) validateAlgorithm() error {
+	validAlgorithms := map[string]bool{
+		"MD5":         true,
+		"SHA-256":     true,
+		"SHA-512-256": true,
+	}
+	
+	if !validAlgorithms[strings.ToUpper(da.Algorithm)] {
+		return fmt.Errorf("invalid algorithm: %s. Valid options are MD5, SHA-256, SHA-512-256", da.Algorithm)
+	}
+	return nil
 }
 
 func (da *DigestAuth) validateBasicConfig() error {

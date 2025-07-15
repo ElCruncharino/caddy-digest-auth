@@ -23,6 +23,7 @@ func TestDigestAuthValidation(t *testing.T) {
 				Users: []User{
 					{Username: "admin", Password: "password"},
 				},
+				Algorithm: "SHA-256",
 			},
 			wantErr: false,
 		},

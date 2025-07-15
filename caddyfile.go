@@ -29,6 +29,7 @@ func (da *DigestAuth) parseCaddyfileBlock(d *caddyfile.Dispenser) error {
 		"timeout":           da.handleTimeoutDirective,
 		"rate_limit_burst":  da.handleRateLimitBurstDirective,
 		"rate_limit_window": da.handleRateLimitWindowDirective,
+		"algorithm":         da.handleAlgorithmDirective,
 	}
 
 	handler, exists := handlers[d.Val()]
@@ -97,6 +98,14 @@ func (da *DigestAuth) handleExcludePathsDirective(d *caddyfile.Dispenser) error 
 	if len(da.ExcludePaths) == 0 {
 		return d.ArgErr()
 	}
+	return nil
+}
+
+func (da *DigestAuth) handleAlgorithmDirective(d *caddyfile.Dispenser) error {
+	if !d.NextArg() {
+		return d.ArgErr()
+	}
+	da.Algorithm = strings.ToUpper(d.Val())
 	return nil
 }
 
