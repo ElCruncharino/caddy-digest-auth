@@ -92,6 +92,8 @@ large-site.example.com {
     "password": "password2"
   }
 ]
+// Note: When using SHA-256 or SHA-512-256 algorithms, passwords are stored
+// in plaintext and hashed during authentication
 ```
 
 ### 3. htdigest File (Traditional approach)
