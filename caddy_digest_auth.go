@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -62,8 +64,8 @@ type User struct {
 
 // credential represents a user's digest authentication credentials
 type credential struct {
-	Realm  string `json:"realm"`
-	Cipher string `json:"cipher"` // MD5(username:realm:password)
+	Realm     string `json:"realm"`
+	Password  string `json:"password"`  // Store actual password for algorithm flexibility
 }
 
 // nonceData stores nonce metadata for validation and replay protection
@@ -350,10 +352,9 @@ func (da *DigestAuth) loadInlineUsers() error {
 		if user.Username == "" || user.Password == "" {
 			return fmt.Errorf("username and password are required for inline users")
 		}
-		ha1 := da.md5Hash(fmt.Sprintf("%s:%s:%s", user.Username, da.Realm, user.Password))
 		da.credentials[user.Username] = credential{
-			Realm:  da.Realm,
-			Cipher: ha1,
+			Realm:    da.Realm,
+			Password: user.Password,
 		}
 	}
 
@@ -444,7 +445,7 @@ func (da *DigestAuth) parseUserFileLine(line string, lineNum int) (string, strin
 		return "", "", "", true, nil
 	}
 
-	return username, realm, md5hash, false, nil
+	return username, realm, md5hash, false, nil // Note: md5hash is stored in Password field for MD5 compatibility
 }
 
 // generateNonce creates a new nonce with all required components

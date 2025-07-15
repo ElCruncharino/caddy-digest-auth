@@ -2,6 +2,7 @@ package caddy_digest_auth
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
