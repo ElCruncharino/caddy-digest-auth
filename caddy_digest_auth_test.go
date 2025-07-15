@@ -47,6 +47,16 @@ func TestDigestAuthValidation(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid explicit MD5 algorithm",
+			config: DigestAuth{
+				Users: []User{
+					{Username: "admin", Password: "password"},
+				},
+				Algorithm: "MD5",
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid algorithm",
 			config: DigestAuth{
 				Users: []User{
