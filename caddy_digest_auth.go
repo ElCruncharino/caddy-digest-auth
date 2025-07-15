@@ -956,7 +956,7 @@ func (da *DigestAuth) validateAlgorithm() error {
 	}
 	
 	// RFC 7616 recommends against using MD5 if stronger algorithms are available
-	if algUpper == "MD5" {
+	if algUpper == "MD5" && da.logger != nil {
 		da.logger.Warn("MD5 algorithm is deprecated for security reasons", 
 			zap.String("recommendation", "Upgrade to SHA-256 or SHA-512-256"))
 	}
