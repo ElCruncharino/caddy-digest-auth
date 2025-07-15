@@ -18,87 +18,27 @@ func TestDigestAuthValidation(t *testing.T) {
 		config  DigestAuth
 		wantErr bool
 	}{
-		{
-			name: "valid inline users SHA-256",
-			config: DigestAuth{
-				Users: []User{
-					{Username: "admin", Password: "password"},
-				},
-				Algorithm: AlgorithmSHA256,
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid inline users SHA-512-256",
-			config: DigestAuth{
-				Users: []User{
-					{Username: "admin", Password: "password"},
-				},
-				Algorithm: AlgorithmSHA512256,
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid default MD5 algorithm",
-			config: DigestAuth{
-				Users: []User{
-					{Username: "admin", Password: "password"},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid explicit MD5 algorithm",
-			config: DigestAuth{
-				Users: []User{
-					{Username: "admin", Password: "password"},
-				},
-				Algorithm: "MD5",
-			},
-			wantErr: false,
-		},
-		{
-			name: "invalid algorithm",
-			config: DigestAuth{
-				Users: []User{
-					{Username: "admin", Password: "password"},
-				},
-				Algorithm: "SHA3-256",
-			},
-			wantErr: true,
-		},
-		{
-			name: "valid user file",
-			config: DigestAuth{
-				UserFile: tmpUserFile,
-				Algorithm: "MD5", // Explicitly set for test clarity
-			},
-			wantErr: false,
-		},
-		{
-			name:    "no users specified",
-			config:  DigestAuth{},
-			wantErr: true,
-		},
-		{
-			name: "both users and user file specified",
-			config: DigestAuth{
-				Users: []User{
-					{Username: "admin", Password: "password"},
-				},
-				UserFile: tmpUserFile,
-			},
-			wantErr: true,
-		},
+		{name: "valid inline users SHA-256", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: AlgorithmSHA256}, wantErr: false},
+		{name: "valid inline users SHA-512-256", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: AlgorithmSHA512256}, wantErr: false},
+		{name: "valid default MD5 algorithm", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}}, wantErr: false},
+		{name: "valid explicit MD5 algorithm", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: "MD5"}, wantErr: false},
+		{name: "invalid algorithm", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: "SHA3-256"}, wantErr: true},
+		{name: "valid user file", config: DigestAuth{UserFile: tmpUserFile, Algorithm: "MD5"}, wantErr: false},
+		{name: "no users specified", config: DigestAuth{}, wantErr: true},
+		{name: "both users and user file specified", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, UserFile: tmpUserFile}, wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("DigestAuth.Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
+			runDigestAuthValidationTest(t, tt.config, tt.wantErr)
 		})
+	}
+}
+
+func runDigestAuthValidationTest(t *testing.T, config DigestAuth, wantErr bool) {
+	err := config.Validate()
+	if (err != nil) != wantErr {
+		t.Errorf("DigestAuth.Validate() error = %v, wantErr %v", err, wantErr)
 	}
 }
 
@@ -157,12 +97,10 @@ func TestGetAlgorithmForClient(t *testing.T) {
 
 func TestAuthenticationFlows(t *testing.T) {
 	da := DigestAuth{
-		Users: []User{
-			{Username: "testuser", Password: "testpass"},
-		},
+		Users: []User{{Username: "testuser", Password: "testpass"}},
 		Realm: "Test Realm",
 	}
-	
+
 	// Provision with test logger
 	ctx := caddy.Context{}
 	err := da.Provision(ctx)
@@ -172,85 +110,53 @@ func TestAuthenticationFlows(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		serverAlg     string // Algorithm configured on the server
-		clientAlg     string // Algorithm client claims to use
+		serverAlg     string
+		clientAlg     string
 		shouldSucceed bool
-		qop           string // Quality of protection
+		qop           string
 	}{
-		{
-			name:          "MD5 fallback (server default, client no alg)",
-			serverAlg:     "", // Server defaults to MD5
-			clientAlg:     "", // Client doesn't specify
-			shouldSucceed: true,
-			qop:           "auth",
-		},
-		{
-			name:          "SHA-256 forced (server SHA-256, client SHA-256)",
-			serverAlg:     AlgorithmSHA256,
-			clientAlg:     AlgorithmSHA256,
-			shouldSucceed: true,
-			qop:           "auth",
-		},
-		{
-			name:          "client requests unsupported algorithm (server SHA-256, client SHA3-512)",
-			serverAlg:     AlgorithmSHA256,
-			clientAlg:     "SHA3-512", // Client requests unsupported, server falls back to SHA-256
-			shouldSucceed: true,       // Should succeed if server falls back and client's response matches server's algorithm
-			qop:           "auth",
-		},
-		{
-			name:          "MD5 with qop auth",
-			serverAlg:     "MD5",
-			clientAlg:     "MD5",
-			shouldSucceed: true,
-			qop:           "auth",
-		},
-		{
-			name:          "SHA-256 with qop auth",
-			serverAlg:     AlgorithmSHA256,
-			clientAlg:     AlgorithmSHA256,
-			shouldSucceed: true,
-			qop:           "auth",
-		},
+		{name: "MD5 fallback (server default, client no alg)", serverAlg: "", clientAlg: "", shouldSucceed: true, qop: "auth"},
+		{name: "SHA-256 forced (server SHA-256, client SHA-256)", serverAlg: AlgorithmSHA256, clientAlg: AlgorithmSHA256, shouldSucceed: true, qop: "auth"},
+		{name: "client requests unsupported algorithm (server SHA-256, client SHA3-512)", serverAlg: AlgorithmSHA256, clientAlg: "SHA3-512", shouldSucceed: true, qop: "auth"},
+		{name: "MD5 with qop auth", serverAlg: "MD5", clientAlg: "MD5", shouldSucceed: true, qop: "auth"},
+		{name: "SHA-256 with qop auth", serverAlg: AlgorithmSHA256, clientAlg: AlgorithmSHA256, shouldSucceed: true, qop: "auth"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Reset algorithm for each test run
-			da.Algorithm = tt.serverAlg
-
-			// Generate a fresh nonce for each test case
-			nonce, nonceData, err := da.generateNonce()
-			if err != nil {
-				t.Fatalf("Failed to generate nonce: %v", err)
-			}
-
-			// Simulate client context
-			ctx := &authContext{
-				user:      "testuser",
-				realm:     "Test Realm",
-				nonce:     nonce,
-				uri:       "/protected",
-				method:    "GET",
-				algorithm: tt.clientAlg,
-				qop:       tt.qop,
-				nc:        "00000001", // Nonce count, typically starts at 1
-				cnonce:    "abcdef0123456789", // Client nonce
-				opaque:    nonceData.Opaque,
-			}
-
-			// Calculate expected response using the server's logic
-			cred := credential{Password: "testpass"}
-			expectedResponse := da.calculateExpectedResponse(ctx, cred)
-
-			// Simulate client sending the calculated response
-			ctx.response = expectedResponse
-
-			valid, _ := da.verify(ctx, "127.0.0.1", zap.NewNop())
-			if valid != tt.shouldSucceed {
-				t.Errorf("Test %s failed: expected %v, got %v", tt.name, tt.shouldSucceed, valid)
-			}
+			runAuthenticationFlowTest(t, &da, tt.serverAlg, tt.clientAlg, tt.shouldSucceed, tt.qop)
 		})
+	}
+}
+
+func runAuthenticationFlowTest(t *testing.T, da *DigestAuth, serverAlg, clientAlg string, shouldSucceed bool, qop string) {
+	da.Algorithm = serverAlg
+
+	nonce, nonceData, err := da.generateNonce()
+	if err != nil {
+		t.Fatalf("Failed to generate nonce: %v", err)
+	}
+
+	ctx := &authContext{
+		user:      "testuser",
+		realm:     "Test Realm",
+		nonce:     nonce,
+		uri:       "/protected",
+		method:    "GET",
+		algorithm: clientAlg,
+		qop:       qop,
+		nc:        "00000001",
+		cnonce:    "abcdef0123456789",
+		opaque:    nonceData.Opaque,
+	}
+
+	cred := credential{Password: "testpass"}
+	expectedResponse := da.calculateExpectedResponse(ctx, cred)
+	ctx.response = expectedResponse
+
+	valid, _ := da.verify(ctx, "127.0.0.1", zap.NewNop())
+	if valid != shouldSucceed {
+		t.Errorf("Test %s failed: expected %v, got %v", t.Name(), shouldSucceed, valid)
 	}
 }
 
