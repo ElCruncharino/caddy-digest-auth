@@ -517,7 +517,7 @@ func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool, logger *z
 	}
 	// RFC 7616 requires UTF-8 and allows multiple quality of protection options
 	challenge := fmt.Sprintf(
-		`Digest realm="%s", charset="UTF-8", algorithm=%s, qop="auth,auth-int", nonce="%s", opaque="%s"`,
+		`Digest realm="%s", charset="UTF-8", algorithm=%s, qop="auth", nonce="%s", opaque="%s"`,
 		da.Realm, algorithm, nonce, nonceData.Opaque)
 
 	if stale {
