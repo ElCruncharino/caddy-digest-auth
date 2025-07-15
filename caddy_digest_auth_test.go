@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
+	"go.uber.org/zap"
 )
 
 func TestDigestAuthValidation(t *testing.T) {
@@ -206,9 +207,6 @@ func TestAuthenticationFlows(t *testing.T) {
 				uri:       "/protected",
 			}
 
-			// Get expected algorithm
-			alg := da.getAlgorithmForClient(ctx)
-			
 			// Calculate expected response
 			cred := credential{Password: "testpass"}
 			expected := da.calculateExpectedResponse(ctx, cred)
