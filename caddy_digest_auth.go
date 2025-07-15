@@ -404,7 +404,7 @@ func (da *DigestAuth) processUserFileLine(line string, lineNum int) (loaded int,
 		return 0, 1, err
 	}
 
-	da.credentials[username] = credential{Realm: realm, Cipher: md5hash}
+	da.credentials[username] = credential{Realm: realm, Password: md5hash}
 	return 1, 0, nil
 }
 
