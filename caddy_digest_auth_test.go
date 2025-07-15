@@ -31,6 +31,7 @@ func TestDigestAuthValidation(t *testing.T) {
 			name: "valid user file",
 			config: DigestAuth{
 				UserFile: tmpUserFile,
+				Algorithm: "MD5", // Explicitly set for test clarity
 			},
 			wantErr: false,
 		},

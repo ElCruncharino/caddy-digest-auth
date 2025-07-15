@@ -909,6 +909,11 @@ func (da *DigestAuth) Validate() error {
 }
 
 func (da *DigestAuth) validateAlgorithm() error {
+	// Empty algorithm is valid (defaults to MD5)
+	if da.Algorithm == "" {
+		return nil
+	}
+	
 	validAlgorithms := map[string]bool{
 		"MD5":         true,
 		"SHA-256":     true,
