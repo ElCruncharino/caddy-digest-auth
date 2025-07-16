@@ -9,6 +9,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const testRealm = "Test Realm"
+
 func TestDigestAuthValidation(t *testing.T) {
 	tmpUserFile := "test_users.json"
 	os.WriteFile(tmpUserFile, []byte(`[{"username":"admin","password":"password"}]`), 0600)
@@ -117,7 +119,7 @@ func TestAuthenticationFlows(t *testing.T) {
 			// Create a new DigestAuth instance for each test to ensure isolation
 			testDA := DigestAuth{
 				Users: []User{{Username: "testuser", Password: "testpass"}},
-				Realm: "Test Realm",
+				Realm: testRealm,
 			}
 
 			// Provision with the specific algorithm for this test case
@@ -135,7 +137,7 @@ func TestAuthenticationFlows(t *testing.T) {
 
 			authCtx := &authContext{
 				user:      "testuser",
-				realm:     "Test Realm",
+				realm:     testRealm,
 				nonce:     nonce,
 				uri:       "/protected",
 				method:    "GET",
@@ -147,8 +149,8 @@ func TestAuthenticationFlows(t *testing.T) {
 			}
 
 			// Calculate HA1 dynamically based on the server's algorithm for the test user
-			testUserHA1 := testDA.digestHash(testDA.getAlgorithmForClient(authCtx), fmt.Sprintf("%s:%s:%s", "testuser", "Test Realm", "testpass"))
-			cred := credential{HA1: testUserHA1, Realm: "Test Realm"}
+			testUserHA1 := testDA.digestHash(testDA.getAlgorithmForClient(authCtx), fmt.Sprintf("%s:%s:%s", "testuser", testRealm, "testpass"))
+			cred := credential{HA1: testUserHA1, Realm: testRealm}
 			expectedResponse := testDA.calculateExpectedResponse(authCtx, cred)
 			authCtx.response = expectedResponse
 
