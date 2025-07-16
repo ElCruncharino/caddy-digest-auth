@@ -325,7 +325,7 @@ The `HA1` hash (MD5(username:realm:password) or SHA-256(username:realm:password)
   When you define users directly in your Caddyfile with plaintext passwords, the module calculates the `HA1` hash on the fly using the `algorithm` specified in your `digest_auth` block (e.g., `SHA-256`, `SHA-512-256`, or `MD5` by default). This means you can use stronger algorithms with inline users.
 
 - **htdigest File (`user_file` option):**
-  The `htdigest` file format inherently stores `HA1` hashes as MD5. Therefore, if you use a `user_file` to load credentials, the module will always treat the `HA1` values from that file as MD5 hashes, regardless of the `algorithm` setting in your Caddyfile. If your `htdigest` file contains hashes generated with a different algorithm, authentication will fail.
+  The `htdigest` file format inherently stores `HA1` hashes as MD5. Therefore, if you use a `user_file` to load credentials, the module will always treat the `HA1` values from that file as MD5 hashes, regardless of the `algorithm` setting in your Caddyfile. **It is crucial to only use MD5 when loading credentials from an `htdigest` file; using other algorithms will result in authentication failures.** If your `htdigest` file contains hashes generated with a different algorithm, authentication will fail.
 
 ## Development
 
