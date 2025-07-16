@@ -10,8 +10,7 @@
                 {
                   "handler": "digest_auth",
                   "realm": "Protected Area",
-                  "algorithm": "SHA-512-256",  // Defaults to MD5 if omitted
-                  "user_file": "/etc/caddy/users.json",
+                  "user_file": "/etc/caddy/users.htdigest",
                   "exclude_paths": [
                     "/public/*",
                     "/health",
