@@ -1,0 +1,36 @@
+#!/bin/bash
+# Pre-commit hook for Go formatting and linting
+# Install: cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check if there are Go files to format
+GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+
+if [ -z "$GO_FILES" ]; then
+    echo "No Go files to check"
+    exit 0
+fi
+
+# Run gofmt
+echo "Running gofmt..."
+UNFORMATTED=$(gofmt -l $GO_FILES)
+if [ -n "$UNFORMATTED" ]; then
+    echo "The following files need formatting:"
+    echo "$UNFORMATTED"
+    echo ""
+    echo "Run: gofmt -w $UNFORMATTED"
+    exit 1
+fi
+
+# Run go vet
+echo "Running go vet..."
+go vet ./...
+
+# Run tests
+echo "Running tests..."
+go test -short ./...
+
+echo "All checks passed!"
