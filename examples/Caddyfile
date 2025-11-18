@@ -1,0 +1,73 @@
+# Basic digest authentication with inline users
+localhost:8080 {
+	digest_auth {
+		realm "Protected Area"
+		algorithm SHA-256
+		users {
+			admin "secure_password_123"
+			user1 "another_secure_pass"
+		}
+	}
+
+	respond "Hello, authenticated user!"
+}
+
+# Using htdigest file with path exclusions
+example.com {
+	digest_auth {
+		realm "My Site"
+		algorithm SHA-512-256
+		user_file /etc/caddy/users.htdigest
+		exclude_paths /public/* /health /metrics
+		expires 300
+		replays 100
+		rate_limit_burst 10
+		rate_limit_window 300
+	}
+
+	reverse_proxy localhost:3000
+}
+
+# Path-specific authentication
+api.example.com {
+	# Public API endpoints
+	handle /api/public/* {
+		reverse_proxy localhost:4000
+	}
+
+	# Protected admin endpoints
+	handle /api/admin/* {
+		digest_auth {
+			realm "Admin API"
+			algorithm SHA-256
+			users {
+				admin "very_secure_admin_password"
+			}
+			rate_limit_burst 5
+			rate_limit_window 60
+		}
+		reverse_proxy localhost:4000
+	}
+
+	# Default handler for other endpoints
+	handle {
+		reverse_proxy localhost:4000
+	}
+}
+
+# High-security configuration
+secure.example.com {
+	digest_auth {
+		realm "High Security Zone"
+		algorithm SHA-512-256
+		user_file /etc/caddy/secure_users.htdigest
+		expires 180          # Short nonce expiration (3 minutes)
+		replays 50           # Low replay limit
+		timeout 180
+		rate_limit_burst 3   # Very restrictive rate limiting
+		rate_limit_window 300
+		enable_metrics true  # Enable metrics collection
+	}
+
+	reverse_proxy localhost:5000
+}
