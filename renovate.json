@@ -1,0 +1,56 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "timezone": "America/New_York",
+  "schedule": [
+    "before 6am on Monday"
+  ],
+  "packageRules": [
+    {
+      "description": "Auto-merge minor and patch updates for Go dependencies",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "description": "Auto-merge patch updates for GitHub Actions",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "description": "Group all non-major Go dependency updates into a single PR",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "Go dependencies (non-major)"
+    },
+    {
+      "description": "Separate PR for Caddy updates (important dependency)",
+      "matchManagers": ["gomod"],
+      "matchPackagePatterns": ["^github.com/caddyserver/caddy"],
+      "groupName": "Caddy"
+    },
+    {
+      "description": "Auto-merge Go version updates for patch releases",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    }
+  ],
+  "automerge": true,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
+  "platformAutomerge": true,
+  "ignoreTests": false,
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "rebaseWhen": "behind-base-branch",
+  "semanticCommits": "disabled",
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "automerge": true
+  }
+}
