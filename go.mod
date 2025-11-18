@@ -1,6 +1,6 @@
 module github.com/ElCruncharino/caddy-digest-auth
 
-go 1.23.12
+go 1.24.8
 
 require (
 	github.com/caddyserver/caddy/v2 v2.9.0
