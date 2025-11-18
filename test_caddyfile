@@ -1,9 +1,0 @@
-:8080 {
-    digest_auth {
-        realm "Test Area"
-        users {
-            testuser "testpass"
-        }
-    }
-    respond "Hello, authenticated user!"
-}
