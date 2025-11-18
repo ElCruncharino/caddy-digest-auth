@@ -21,10 +21,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// The rug ties the room together (for context cleanup)
-var rugCleanup sync.Once
-
-// stranger: sometimes there's a logger, well, he's the logger for his time and place (unused)
+var cleanupOnce sync.Once
 
 func init() {
 	caddy.RegisterModule(DigestAuth{})
@@ -947,7 +944,6 @@ func (da *DigestAuth) resetRateLimit(remoteAddr string) {
 }
 
 // cleanupRoutine periodically cleans up expired nonces and rate limits
-// The Dude abides: this routine keeps things tidy, man
 func (da *DigestAuth) cleanupRoutine() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -1088,8 +1084,8 @@ func (da *DigestAuth) isPathExcluded(path string) bool {
 				return true
 			}
 		} else {
-			// Exact match or simple prefix matching
-			if strings.HasPrefix(path, excludePath) {
+			// Exact match only
+			if path == excludePath {
 				return true
 			}
 		}
