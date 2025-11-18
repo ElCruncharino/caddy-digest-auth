@@ -861,8 +861,9 @@ func (da *DigestAuth) digestHash(algorithm string, input string) string {
 	case AlgorithmSHA512256:
 		hash := sha512.Sum512_256(inputBytes)
 		return fmt.Sprintf("%x", hash)
-	default: // MD5 (RFC 2617)
-		hash := md5.Sum(inputBytes)
+	default: // MD5 (RFC 2617 requirement)
+		// nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5
+		hash := md5.Sum(inputBytes) // MD5 required by RFC 2617 for Digest Authentication
 		return fmt.Sprintf("%x", hash)
 	}
 }
