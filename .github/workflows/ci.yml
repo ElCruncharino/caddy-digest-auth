@@ -21,22 +21,14 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
 
-    - name: Install xcaddy
-      run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-
     - name: Verify dependencies
       run: go mod verify
 
     - name: Run tests
       run: go test -v ./...
 
-    - name: Build Caddy with module
-      run: xcaddy build --with github.com/ElCruncharino/caddy-digest-auth
-
-    - name: Test module integration
-      run: |
-        ./caddy version
-        ./caddy list-modules | grep digest_auth
+    - name: Run tests with race detector
+      run: go test -race ./...
 
   build:
     runs-on: ubuntu-latest
@@ -46,23 +38,20 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.23.11'
-
-    - name: Install xcaddy
-      run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-
-    - name: Build for multiple platforms
+    - name: Build with Docker
       run: |
-        mkdir -p dist
-        xcaddy build --with github.com/ElCruncharino/caddy-digest-auth --output dist/caddy-linux-amd64
-        xcaddy build --with github.com/ElCruncharino/caddy-digest-auth --output dist/caddy-windows-amd64.exe
-        xcaddy build --with github.com/ElCruncharino/caddy-digest-auth --output dist/caddy-darwin-amd64
+        docker run --rm -v "$PWD:/workspace" -w /workspace caddy:builder-alpine \
+          xcaddy build --with github.com/ElCruncharino/caddy-digest-auth
 
-    - name: Upload build artifacts
+    - name: Test module integration
+      run: |
+        docker run --rm -v "$PWD:/workspace" -w /workspace caddy:builder-alpine \
+          /workspace/caddy version
+        docker run --rm -v "$PWD:/workspace" -w /workspace caddy:builder-alpine \
+          /workspace/caddy list-modules | grep digest_auth
+
+    - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: caddy-binaries
-        path: dist/ 
+        name: caddy-binary
+        path: caddy 
