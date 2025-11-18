@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"go.uber.org/zap"
 )
 
@@ -199,5 +201,289 @@ func TestDigestAuthProvision(t *testing.T) {
 	err = daMD5.Provision(ctx)
 	if err != nil {
 		t.Errorf("Provision with MD5 failed: %v", err)
+	}
+}
+
+func TestUnmarshalCaddyfile(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantErr     bool
+		checkFunc   func(*DigestAuth) error
+	}{
+		{
+			name: "basic config with inline users",
+			input: `digest_auth {
+				realm "Test Realm"
+				algorithm SHA-256
+				users admin password123 user1 pass456
+			}`,
+			wantErr: false,
+			checkFunc: func(da *DigestAuth) error {
+				if da.Realm != "Test Realm" {
+					return fmt.Errorf("expected realm 'Test Realm', got '%s'", da.Realm)
+				}
+				if da.Algorithm != "SHA-256" {
+					return fmt.Errorf("expected algorithm 'SHA-256', got '%s'", da.Algorithm)
+				}
+				if len(da.Users) != 2 {
+					return fmt.Errorf("expected 2 users, got %d", len(da.Users))
+				}
+				return nil
+			},
+		},
+		{
+			name: "config with user file",
+			input: `digest_auth {
+				realm "File Realm"
+				user_file /etc/caddy/users.htdigest
+			}`,
+			wantErr: false,
+			checkFunc: func(da *DigestAuth) error {
+				if da.UserFile != "/etc/caddy/users.htdigest" {
+					return fmt.Errorf("expected user_file '/etc/caddy/users.htdigest', got '%s'", da.UserFile)
+				}
+				return nil
+			},
+		},
+		{
+			name: "config with exclude paths",
+			input: `digest_auth {
+				realm "Test"
+				users admin pass
+				exclude_paths /public/* /health /metrics
+			}`,
+			wantErr: false,
+			checkFunc: func(da *DigestAuth) error {
+				if len(da.ExcludePaths) != 3 {
+					return fmt.Errorf("expected 3 exclude paths, got %d", len(da.ExcludePaths))
+				}
+				return nil
+			},
+		},
+		{
+			name: "config with rate limiting",
+			input: `digest_auth {
+				realm "Test"
+				users admin pass
+				rate_limit_burst 10
+				rate_limit_window 300
+			}`,
+			wantErr: false,
+			checkFunc: func(da *DigestAuth) error {
+				if da.RateLimitBurst != 10 {
+					return fmt.Errorf("expected rate_limit_burst 10, got %d", da.RateLimitBurst)
+				}
+				if da.RateLimitWindow != 300 {
+					return fmt.Errorf("expected rate_limit_window 300, got %d", da.RateLimitWindow)
+				}
+				return nil
+			},
+		},
+		{
+			name: "config with expires and replays",
+			input: `digest_auth {
+				realm "Test"
+				users admin pass
+				expires 600
+				replays 100
+				timeout 900
+			}`,
+			wantErr: false,
+			checkFunc: func(da *DigestAuth) error {
+				if da.Expires != 600 {
+					return fmt.Errorf("expected expires 600, got %d", da.Expires)
+				}
+				if da.Replays != 100 {
+					return fmt.Errorf("expected replays 100, got %d", da.Replays)
+				}
+				if da.Timeout != 900 {
+					return fmt.Errorf("expected timeout 900, got %d", da.Timeout)
+				}
+				return nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := caddyfile.NewTestDispenser(tt.input)
+			da := new(DigestAuth)
+			err := da.UnmarshalCaddyfile(d)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalCaddyfile() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.checkFunc != nil && err == nil {
+				if err := tt.checkFunc(da); err != nil {
+					t.Errorf("checkFunc failed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRateLimiting(t *testing.T) {
+	da := DigestAuth{
+		RateLimitBurst:  3,
+		RateLimitWindow: 60,
+	}
+	da.initializeMaps()
+
+	remoteAddr := "192.168.1.1"
+
+	// Should not be rate limited initially
+	if da.isRateLimited(remoteAddr) {
+		t.Error("Should not be rate limited initially")
+	}
+
+	// Increment up to burst limit
+	for i := 0; i < 3; i++ {
+		da.incrementRateLimit(remoteAddr)
+	}
+
+	// Should now be rate limited
+	if !da.isRateLimited(remoteAddr) {
+		t.Error("Should be rate limited after reaching burst limit")
+	}
+
+	// Reset should clear the limit
+	da.resetRateLimit(remoteAddr)
+	if da.isRateLimited(remoteAddr) {
+		t.Error("Should not be rate limited after reset")
+	}
+}
+
+func TestPathExclusion(t *testing.T) {
+	da := DigestAuth{
+		ExcludePaths: []string{"/public/*", "/health", "/api/status"},
+	}
+
+	tests := []struct {
+		path     string
+		excluded bool
+	}{
+		{"/public/image.png", true},
+		{"/public/css/style.css", true},
+		{"/health", true},
+		{"/api/status", true},
+		{"/api/users", false},
+		{"/admin", false},
+		{"/healthcheck", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result := da.isPathExcluded(tt.path)
+			if result != tt.excluded {
+				t.Errorf("isPathExcluded(%s) = %v, want %v", tt.path, result, tt.excluded)
+			}
+		})
+	}
+}
+
+func TestHTDigestFileParsing(t *testing.T) {
+	// Create a temporary htdigest file
+	tmpFile, err := os.CreateTemp("", "test_htdigest_*.txt")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// Write test data
+	content := `admin:Test Realm:5f4dcc3b5aa765d61d8327deb882cf99
+user1:Test Realm:098f6bcd4621d373cade4e832627b4f6
+# This is a comment
+user2:Wrong Realm:abc123def456
+user3:invalid_format_only_two_parts
+validuser:Test Realm:7c6a180b36896a0a8c02787eeafb0e4c
+`
+	if _, err := tmpFile.WriteString(content); err != nil {
+		t.Fatalf("Failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	da := DigestAuth{
+		UserFile: tmpFile.Name(),
+		Realm:    testRealm,
+	}
+	da.initializeMaps()
+
+	err = da.loadUserFile()
+	if err != nil {
+		t.Fatalf("loadUserFile failed: %v", err)
+	}
+
+	// Should load 2 users (admin and user1 and validuser with correct realm)
+	expectedUsers := []string{"admin", "user1", "validuser"}
+	for _, username := range expectedUsers {
+		if _, exists := da.credentials[username]; !exists {
+			t.Errorf("Expected user '%s' to be loaded", username)
+		}
+	}
+
+	// user2 should not be loaded (wrong realm)
+	if _, exists := da.credentials["user2"]; exists {
+		t.Error("user2 should not be loaded (wrong realm)")
+	}
+
+	// user3 should not be loaded (invalid format)
+	if _, exists := da.credentials["user3"]; exists {
+		t.Error("user3 should not be loaded (invalid format)")
+	}
+}
+
+func TestNonceExpiration(t *testing.T) {
+	da := DigestAuth{
+		Expires: 1, // 1 second expiration
+		Replays: 10,
+		Timeout: 1,
+	}
+	da.initializeMaps()
+
+	if err := da.generateSalt(); err != nil {
+		t.Fatalf("Failed to generate salt: %v", err)
+	}
+
+	nonce, _, err := da.generateNonce()
+	if err != nil {
+		t.Fatalf("Failed to generate nonce: %v", err)
+	}
+
+	// Should be valid immediately
+	stale, _ := da.validateNonce(nonce)
+	if stale {
+		t.Error("Nonce should be valid immediately after generation")
+	}
+
+	// Wait for expiration
+	time.Sleep(2 * time.Second)
+
+	// Should now be stale
+	stale, _ = da.validateNonce(nonce)
+	if !stale {
+		t.Error("Nonce should be stale after expiration")
+	}
+}
+
+func TestMetricsCollection(t *testing.T) {
+	metrics := &Metrics{}
+
+	// Test incrementing various metrics
+	metrics.IncrementMetric(&metrics.TotalRequests)
+	metrics.IncrementMetric(&metrics.SuccessfulAuths)
+	metrics.IncrementMetric(&metrics.FailedAuths)
+
+	result := metrics.GetMetrics()
+	if result["total_requests"] != 1 {
+		t.Errorf("Expected total_requests 1, got %d", result["total_requests"])
+	}
+	if result["successful_auths"] != 1 {
+		t.Errorf("Expected successful_auths 1, got %d", result["successful_auths"])
+	}
+	if result["failed_auths"] != 1 {
+		t.Errorf("Expected failed_auths 1, got %d", result["failed_auths"])
 	}
 }
