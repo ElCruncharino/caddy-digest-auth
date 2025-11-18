@@ -50,9 +50,11 @@ test_users.htdigest
 .env
 .env.local
 
-# Caddy specific
+# Caddy specific (but keep examples)
 Caddyfile
 *.caddyfile
+!examples/Caddyfile
+!examples/*.caddyfile
 
 # User files (for security)
 users.htdigest
