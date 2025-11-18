@@ -332,7 +332,7 @@ func TestRateLimiting(t *testing.T) {
 	}
 	da.initializeMaps()
 
-	remoteAddr := "192.168.1.1"
+	remoteAddr := "127.0.0.1" // Test IP, no actual network connections made
 
 	// Should not be rate limited initially
 	if da.isRateLimited(remoteAddr) {
