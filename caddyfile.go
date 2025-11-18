@@ -121,5 +121,3 @@ func (da *DigestAuth) handleIntDirective(d *caddyfile.Dispenser, field *int) err
 	*field = val
 	return nil
 }
-
-// bowlingMatcher is used for test matchers (the game goes on)
