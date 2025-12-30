@@ -213,13 +213,82 @@ func TestDigestAuthProvision(t *testing.T) {
 	}
 }
 
+type caddyfileTestCase struct {
+	name      string
+	input     string
+	wantErr   bool
+	checkFunc func(*DigestAuth) error
+}
+
+func checkBasicConfig(da *DigestAuth) error {
+	if da.Realm != "Test Realm" {
+		return fmt.Errorf("expected realm 'Test Realm', got '%s'", da.Realm)
+	}
+	if da.Algorithm != "SHA-256" {
+		return fmt.Errorf("expected algorithm 'SHA-256', got '%s'", da.Algorithm)
+	}
+	if len(da.Users) != 2 {
+		return fmt.Errorf("expected 2 users, got %d", len(da.Users))
+	}
+	return nil
+}
+
+func checkUserFile(da *DigestAuth) error {
+	if da.UserFile != "/etc/caddy/users.htdigest" {
+		return fmt.Errorf("expected user_file '/etc/caddy/users.htdigest', got '%s'", da.UserFile)
+	}
+	return nil
+}
+
+func checkExcludePaths(da *DigestAuth) error {
+	if len(da.ExcludePaths) != 3 {
+		return fmt.Errorf("expected 3 exclude paths, got %d", len(da.ExcludePaths))
+	}
+	return nil
+}
+
+func checkRateLimiting(da *DigestAuth) error {
+	if da.RateLimitBurst != 10 {
+		return fmt.Errorf("expected rate_limit_burst 10, got %d", da.RateLimitBurst)
+	}
+	if da.RateLimitWindow != 300 {
+		return fmt.Errorf("expected rate_limit_window 300, got %d", da.RateLimitWindow)
+	}
+	return nil
+}
+
+func checkExpiresAndReplays(da *DigestAuth) error {
+	if da.Expires != 600 {
+		return fmt.Errorf("expected expires 600, got %d", da.Expires)
+	}
+	if da.Replays != 100 {
+		return fmt.Errorf("expected replays 100, got %d", da.Replays)
+	}
+	if da.Timeout != 900 {
+		return fmt.Errorf("expected timeout 900, got %d", da.Timeout)
+	}
+	return nil
+}
+
+func runCaddyfileTest(t *testing.T, tc caddyfileTestCase) {
+	d := caddyfile.NewTestDispenser(tc.input)
+	da := new(DigestAuth)
+	err := da.UnmarshalCaddyfile(d)
+
+	if (err != nil) != tc.wantErr {
+		t.Errorf("UnmarshalCaddyfile() error = %v, wantErr %v", err, tc.wantErr)
+		return
+	}
+
+	if tc.checkFunc != nil && err == nil {
+		if err := tc.checkFunc(da); err != nil {
+			t.Errorf("checkFunc failed: %v", err)
+		}
+	}
+}
+
 func TestUnmarshalCaddyfile(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		wantErr     bool
-		checkFunc   func(*DigestAuth) error
-	}{
+	tests := []caddyfileTestCase{
 		{
 			name: "basic config with inline users",
 			input: `digest_auth {
@@ -227,19 +296,7 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 				algorithm SHA-256
 				users admin password123 user1 pass456
 			}`,
-			wantErr: false,
-			checkFunc: func(da *DigestAuth) error {
-				if da.Realm != "Test Realm" {
-					return fmt.Errorf("expected realm 'Test Realm', got '%s'", da.Realm)
-				}
-				if da.Algorithm != "SHA-256" {
-					return fmt.Errorf("expected algorithm 'SHA-256', got '%s'", da.Algorithm)
-				}
-				if len(da.Users) != 2 {
-					return fmt.Errorf("expected 2 users, got %d", len(da.Users))
-				}
-				return nil
-			},
+			checkFunc: checkBasicConfig,
 		},
 		{
 			name: "config with user file",
@@ -247,13 +304,7 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 				realm "File Realm"
 				user_file /etc/caddy/users.htdigest
 			}`,
-			wantErr: false,
-			checkFunc: func(da *DigestAuth) error {
-				if da.UserFile != "/etc/caddy/users.htdigest" {
-					return fmt.Errorf("expected user_file '/etc/caddy/users.htdigest', got '%s'", da.UserFile)
-				}
-				return nil
-			},
+			checkFunc: checkUserFile,
 		},
 		{
 			name: "config with exclude paths",
@@ -262,13 +313,7 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 				users admin pass
 				exclude_paths /public/* /health /metrics
 			}`,
-			wantErr: false,
-			checkFunc: func(da *DigestAuth) error {
-				if len(da.ExcludePaths) != 3 {
-					return fmt.Errorf("expected 3 exclude paths, got %d", len(da.ExcludePaths))
-				}
-				return nil
-			},
+			checkFunc: checkExcludePaths,
 		},
 		{
 			name: "config with rate limiting",
@@ -278,16 +323,7 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 				rate_limit_burst 10
 				rate_limit_window 300
 			}`,
-			wantErr: false,
-			checkFunc: func(da *DigestAuth) error {
-				if da.RateLimitBurst != 10 {
-					return fmt.Errorf("expected rate_limit_burst 10, got %d", da.RateLimitBurst)
-				}
-				if da.RateLimitWindow != 300 {
-					return fmt.Errorf("expected rate_limit_window 300, got %d", da.RateLimitWindow)
-				}
-				return nil
-			},
+			checkFunc: checkRateLimiting,
 		},
 		{
 			name: "config with expires and replays",
@@ -298,38 +334,13 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 				replays 100
 				timeout 900
 			}`,
-			wantErr: false,
-			checkFunc: func(da *DigestAuth) error {
-				if da.Expires != 600 {
-					return fmt.Errorf("expected expires 600, got %d", da.Expires)
-				}
-				if da.Replays != 100 {
-					return fmt.Errorf("expected replays 100, got %d", da.Replays)
-				}
-				if da.Timeout != 900 {
-					return fmt.Errorf("expected timeout 900, got %d", da.Timeout)
-				}
-				return nil
-			},
+			checkFunc: checkExpiresAndReplays,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := caddyfile.NewTestDispenser(tt.input)
-			da := new(DigestAuth)
-			err := da.UnmarshalCaddyfile(d)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalCaddyfile() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if tt.checkFunc != nil && err == nil {
-				if err := tt.checkFunc(da); err != nil {
-					t.Errorf("checkFunc failed: %v", err)
-				}
-			}
+			runCaddyfileTest(t, tt)
 		})
 	}
 }
