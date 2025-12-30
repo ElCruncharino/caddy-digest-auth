@@ -11,26 +11,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ["1.24.10", "1.25.4"]
-
     steps:
     - uses: actions/checkout@v5
 
-    - name: Set up Go ${{ matrix.go-version }}
+    - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: ${{ matrix.go-version }}
+        go-version: "1.25.4"
 
     - name: Verify dependencies
       run: go mod verify
 
-    - name: Run tests
-      run: go test -v ./...
-
     - name: Run tests with race detector
-      run: go test -race ./...
+      run: go test -race -v ./...
 
   build:
     runs-on: ubuntu-latest
