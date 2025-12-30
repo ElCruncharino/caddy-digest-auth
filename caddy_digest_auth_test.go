@@ -100,15 +100,65 @@ func TestGetAlgorithmForClient(t *testing.T) {
 	}
 }
 
-func TestAuthenticationFlows(t *testing.T) {
+type authFlowTestCase struct {
+	name          string
+	serverAlg     string
+	clientAlg     string
+	shouldSucceed bool
+	qop           string
+}
 
-	tests := []struct {
-		name          string
-		serverAlg     string
-		clientAlg     string
-		shouldSucceed bool
-		qop           string
-	}{
+func setupDigestAuth(t *testing.T, serverAlg string) *DigestAuth {
+	da := &DigestAuth{
+		Users:     []User{{Username: "testuser", Password: "testpass"}},
+		Realm:     testRealm,
+		Algorithm: serverAlg,
+	}
+	if err := da.Provision(caddy.Context{}); err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+	return da
+}
+
+func createAuthContext(da *DigestAuth, clientAlg, qop string) (*authContext, error) {
+	nonce, nonceData, err := da.generateNonce()
+	if err != nil {
+		return nil, err
+	}
+	return &authContext{
+		user:      "testuser",
+		realm:     testRealm,
+		nonce:     nonce,
+		uri:       "/protected",
+		method:    "GET",
+		algorithm: clientAlg,
+		qop:       qop,
+		nc:        "00000001",
+		cnonce:    "abcdef0123456789",
+		opaque:    nonceData.Opaque,
+	}, nil
+}
+
+func runAuthFlowTest(t *testing.T, tc authFlowTestCase) {
+	da := setupDigestAuth(t, tc.serverAlg)
+
+	authCtx, err := createAuthContext(da, tc.clientAlg, tc.qop)
+	if err != nil {
+		t.Fatalf("Failed to create auth context: %v", err)
+	}
+
+	testUserHA1 := da.digestHash(da.getAlgorithmForClient(authCtx), fmt.Sprintf("%s:%s:%s", "testuser", testRealm, "testpass"))
+	cred := credential{HA1: testUserHA1, Realm: testRealm}
+	authCtx.response = da.calculateExpectedResponse(authCtx, cred)
+
+	valid, _ := da.verify(authCtx, "127.0.0.1", zap.NewNop())
+	if valid != tc.shouldSucceed {
+		t.Errorf("expected %v, got %v", tc.shouldSucceed, valid)
+	}
+}
+
+func TestAuthenticationFlows(t *testing.T) {
+	tests := []authFlowTestCase{
 		{name: "MD5 fallback (server default, client no alg)", serverAlg: "", clientAlg: "", shouldSucceed: true, qop: "auth"},
 		{name: "SHA-256 forced (server SHA-256, client SHA-256)", serverAlg: AlgorithmSHA256, clientAlg: AlgorithmSHA256, shouldSucceed: true, qop: "auth"},
 		{name: "client requests unsupported algorithm (server SHA-256, client SHA3-512)", serverAlg: AlgorithmSHA256, clientAlg: "SHA3-512", shouldSucceed: true, qop: "auth"},
@@ -118,48 +168,7 @@ func TestAuthenticationFlows(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a new DigestAuth instance for each test to ensure isolation
-			testDA := DigestAuth{
-				Users: []User{{Username: "testuser", Password: "testpass"}},
-				Realm: testRealm,
-			}
-
-			// Provision with the specific algorithm for this test case
-			testDA.Algorithm = tt.serverAlg
-			testCaddyCtx := caddy.Context{}
-			err := testDA.Provision(testCaddyCtx)
-			if err != nil {
-				t.Fatalf("Provision failed for %s: %v", tt.name, err)
-			}
-
-			nonce, nonceData, err := testDA.generateNonce()
-			if err != nil {
-				t.Fatalf("Failed to generate nonce: %v", err)
-			}
-
-			authCtx := &authContext{
-				user:      "testuser",
-				realm:     testRealm,
-				nonce:     nonce,
-				uri:       "/protected",
-				method:    "GET",
-				algorithm: tt.clientAlg,
-				qop:       tt.qop,
-				nc:        "00000001",
-				cnonce:    "abcdef0123456789",
-				opaque:    nonceData.Opaque,
-			}
-
-			// Calculate HA1 dynamically based on the server's algorithm for the test user
-			testUserHA1 := testDA.digestHash(testDA.getAlgorithmForClient(authCtx), fmt.Sprintf("%s:%s:%s", "testuser", testRealm, "testpass"))
-			cred := credential{HA1: testUserHA1, Realm: testRealm}
-			expectedResponse := testDA.calculateExpectedResponse(authCtx, cred)
-			authCtx.response = expectedResponse
-
-			valid, _ := testDA.verify(authCtx, "127.0.0.1", zap.NewNop())
-			if valid != tt.shouldSucceed {
-				t.Errorf("Test %s failed: expected %v, got %v", t.Name(), tt.shouldSucceed, valid)
-			}
+			runAuthFlowTest(t, tt)
 		})
 	}
 }
