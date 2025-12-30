@@ -297,7 +297,7 @@ func (da *DigestAuth) handleAuthHeader(w http.ResponseWriter, r *http.Request, a
 
 	pass, stale := da.verify(ctx, r.RemoteAddr, logger)
 	if !pass {
-		return da.handleFailedAuth(w, r, ctx, stale, logger)
+		return da.handleFailedAuth(w, r, stale, logger)
 	}
 
 	return da.handleSuccessfulAuth(w, r, ctx, logger, next)
@@ -315,7 +315,7 @@ func (da *DigestAuth) handleAuthError(w http.ResponseWriter, r *http.Request, er
 	return nil
 }
 
-func (da *DigestAuth) handleFailedAuth(w http.ResponseWriter, r *http.Request, ctx *authContext, stale bool, logger *zap.Logger) error {
+func (da *DigestAuth) handleFailedAuth(w http.ResponseWriter, r *http.Request, stale bool, logger *zap.Logger) error {
 	if da.metrics != nil {
 		da.metrics.IncrementMetric(&da.metrics.FailedAuths)
 	}
@@ -539,7 +539,7 @@ func (da *DigestAuth) sendChallenge(w http.ResponseWriter, stale bool, logger *z
 }
 
 // parseAuthHeader parses the Authorization header
-func (da *DigestAuth) parseAuthHeader(header string, method string) (*authContext, error) {
+func (da *DigestAuth) parseAuthHeader(header, method string) (*authContext, error) {
 	if !strings.HasPrefix(header, "Digest ") {
 		return nil, fmt.Errorf("not a digest authorization header")
 	}
@@ -677,7 +677,7 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 
 	stale, nonceData := da.validateNonce(ctx.nonce)
 	if stale {
-		da.handleStaleNonce(ctx, remoteAddr, logger, nonceData)
+		da.handleStaleNonce(ctx, remoteAddr, logger)
 		return false, true
 	}
 
@@ -724,7 +724,7 @@ func (da *DigestAuth) validateRealm(cred credential, ctx *authContext, remoteAdd
 	return false
 }
 
-func (da *DigestAuth) handleStaleNonce(ctx *authContext, remoteAddr string, logger *zap.Logger, nonceData *nonceData) {
+func (da *DigestAuth) handleStaleNonce(ctx *authContext, remoteAddr string, logger *zap.Logger) {
 	if da.metrics != nil {
 		da.metrics.IncrementMetric(&da.metrics.StaleNonce)
 	}
@@ -851,7 +851,7 @@ func (da *DigestAuth) validateNonce(nonce string) (bool, *nonceData) {
 }
 
 // digestHash calculates hash using configured algorithm
-func (da *DigestAuth) digestHash(algorithm string, input string) string {
+func (da *DigestAuth) digestHash(algorithm, input string) string {
 	inputBytes := []byte(input)
 
 	switch algorithm {
