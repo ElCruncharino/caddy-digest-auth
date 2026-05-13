@@ -21,8 +21,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var cleanupOnce sync.Once
-
 func init() {
 	caddy.RegisterModule(DigestAuth{})
 	httpcaddyfile.RegisterHandlerDirective("digest_auth", parseCaddyfileDigestAuth)
@@ -54,7 +52,7 @@ type DigestAuth struct {
 	nonces      map[string]*nonceData
 	rateLimits  map[string]*rateLimitData
 	salt        string
-	mutex       sync.RWMutex
+	mutex       *sync.RWMutex
 	logger      *zap.Logger
 	metrics     *Metrics
 }
@@ -189,6 +187,7 @@ func (da *DigestAuth) setDefaults() {
 }
 
 func (da *DigestAuth) initializeMaps() {
+	da.mutex = &sync.RWMutex{}
 	da.credentials = make(map[string]credential)
 	da.nonces = make(map[string]*nonceData)
 	da.rateLimits = make(map[string]*rateLimitData)
@@ -383,7 +382,7 @@ func (da *DigestAuth) loadUserFile() error {
 	if err != nil {
 		return fmt.Errorf("failed to open user file: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	var loadedCount, skippedCount int
