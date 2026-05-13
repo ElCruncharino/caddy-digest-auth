@@ -15,22 +15,24 @@ const testRealm = "Test Realm"
 
 func TestDigestAuthValidation(t *testing.T) {
 	tmpUserFile := "test_users.json"
-	os.WriteFile(tmpUserFile, []byte(`[{"username":"admin","password":"password"}]`), 0600)
-	defer os.Remove(tmpUserFile)
+	if err := os.WriteFile(tmpUserFile, []byte(`[{"username":"admin","password":"password"}]`), 0600); err != nil {
+		t.Fatalf("Failed to create temp user file: %v", err)
+	}
+	defer func() { _ = os.Remove(tmpUserFile) }()
 
 	tests := []struct {
 		name    string
-		config  DigestAuth
+		config  *DigestAuth
 		wantErr bool
 	}{
-		{name: "valid inline users SHA-256", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: AlgorithmSHA256}, wantErr: false},
-		{name: "valid inline users SHA-512-256", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: AlgorithmSHA512256}, wantErr: false},
-		{name: "valid default MD5 algorithm", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}}, wantErr: false},
-		{name: "valid explicit MD5 algorithm", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: "MD5"}, wantErr: false},
-		{name: "invalid algorithm", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: "SHA3-256"}, wantErr: true},
-		{name: "valid user file", config: DigestAuth{UserFile: tmpUserFile, Algorithm: "MD5"}, wantErr: false},
-		{name: "no users specified", config: DigestAuth{}, wantErr: true},
-		{name: "both users and user file specified", config: DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, UserFile: tmpUserFile}, wantErr: true},
+		{name: "valid inline users SHA-256", config: &DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: AlgorithmSHA256}, wantErr: false},
+		{name: "valid inline users SHA-512-256", config: &DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: AlgorithmSHA512256}, wantErr: false},
+		{name: "valid default MD5 algorithm", config: &DigestAuth{Users: []User{{Username: "admin", Password: "password"}}}, wantErr: false},
+		{name: "valid explicit MD5 algorithm", config: &DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: "MD5"}, wantErr: false},
+		{name: "invalid algorithm", config: &DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, Algorithm: "SHA3-256"}, wantErr: true},
+		{name: "valid user file", config: &DigestAuth{UserFile: tmpUserFile, Algorithm: "MD5"}, wantErr: false},
+		{name: "no users specified", config: &DigestAuth{}, wantErr: true},
+		{name: "both users and user file specified", config: &DigestAuth{Users: []User{{Username: "admin", Password: "password"}}, UserFile: tmpUserFile}, wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -40,7 +42,7 @@ func TestDigestAuthValidation(t *testing.T) {
 	}
 }
 
-func runDigestAuthValidationTest(t *testing.T, config DigestAuth, wantErr bool) {
+func runDigestAuthValidationTest(t *testing.T, config *DigestAuth, wantErr bool) {
 	err := config.Validate()
 	if (err != nil) != wantErr {
 		t.Errorf("DigestAuth.Validate() error = %v, wantErr %v", err, wantErr)
@@ -410,7 +412,7 @@ func TestHTDigestFileParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	// Write test data
 	content := `admin:Test Realm:5f4dcc3b5aa765d61d8327deb882cf99
@@ -423,7 +425,9 @@ validuser:Test Realm:7c6a180b36896a0a8c02787eeafb0e4c
 	if _, err := tmpFile.WriteString(content); err != nil {
 		t.Fatalf("Failed to write to temp file: %v", err)
 	}
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		t.Fatalf("Failed to close temp file: %v", err)
+	}
 
 	da := DigestAuth{
 		UserFile: tmpFile.Name(),
