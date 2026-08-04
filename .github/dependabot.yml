@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    ignore:
+      # caddyserver/caddy v2.11.4 (latest stable) still requires cel-go v0.28.1;
+      # its celmatcher.go does not compile against cel-go v0.29's breaking API
+      # change (interpreter.NewCall now needs []interpreter.InterpretableV2).
+      # Unpin once Caddy ships a release compatible with cel-go >= v0.29.
+      - dependency-name: "github.com/google/cel-go"
+        versions: [">= 0.29.0"]
