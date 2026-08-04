@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -31,6 +33,8 @@ const (
 	AlgorithmSHA256    = "SHA-256"
 	AlgorithmSHA512256 = "SHA-512-256"
 )
+
+const maxRateLimitEntries = 50000
 
 // DigestAuth implements HTTP Digest Authentication for Caddy
 type DigestAuth struct {
@@ -77,6 +81,7 @@ type nonceData struct {
 	Opaque    string `json:"opaque"`
 	Uses      int    `json:"uses"`
 	ExpiresAt int64  `json:"expires_at"`
+	LastNC    uint64 `json:"last_nc"`
 }
 
 // rateLimitData tracks failed authentication attempts
@@ -674,7 +679,7 @@ func (da *DigestAuth) verify(ctx *authContext, remoteAddr string, logger *zap.Lo
 		return false, false
 	}
 
-	stale, nonceData := da.validateNonce(ctx.nonce)
+	stale, nonceData := da.validateNonce(ctx.nonce, ctx.nc)
 	if stale {
 		da.handleStaleNonce(ctx, remoteAddr, logger)
 		return false, true
@@ -753,7 +758,7 @@ func (da *DigestAuth) validateOpaque(ctx *authContext, nonceData *nonceData, rem
 
 func (da *DigestAuth) validateResponseHash(ctx *authContext, cred credential, remoteAddr string, logger *zap.Logger) bool {
 	expected := da.calculateExpectedResponse(ctx, cred)
-	if expected == ctx.response {
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(ctx.response)) == 1 {
 		return true
 	}
 
@@ -810,7 +815,7 @@ func (da *DigestAuth) calculateExpectedResponse(ctx *authContext, cred credentia
 }
 
 // validateNonce checks if a nonce is valid and not stale
-func (da *DigestAuth) validateNonce(nonce string) (bool, *nonceData) {
+func (da *DigestAuth) validateNonce(nonce, nc string) (bool, *nonceData) {
 	da.mutex.Lock()
 	defer da.mutex.Unlock()
 
@@ -842,6 +847,15 @@ func (da *DigestAuth) validateNonce(nonce string) (bool, *nonceData) {
 	if nonceData.Uses >= da.Replays {
 		delete(da.nonces, nonce)
 		return true, nonceData
+	}
+
+	if nc != "" {
+		parsedNC, err := strconv.ParseUint(nc, 16, 64)
+		if err != nil || parsedNC <= nonceData.LastNC {
+			delete(da.nonces, nonce)
+			return true, nonceData
+		}
+		nonceData.LastNC = parsedNC
 	}
 
 	// Increment usage count
@@ -897,10 +911,20 @@ func (da *DigestAuth) getAlgorithmForClient(ctx *authContext) string {
 	}
 }
 
+func rateLimitKey(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
+}
+
 // isRateLimited checks if a client is rate limited
 func (da *DigestAuth) isRateLimited(remoteAddr string) bool {
-	da.mutex.RLock()
-	defer da.mutex.RUnlock()
+	remoteAddr = rateLimitKey(remoteAddr)
+
+	da.mutex.Lock()
+	defer da.mutex.Unlock()
 
 	rateData, exists := da.rateLimits[remoteAddr]
 	if !exists {
@@ -919,6 +943,8 @@ func (da *DigestAuth) isRateLimited(remoteAddr string) bool {
 
 // incrementRateLimit increments the rate limit counter for a client
 func (da *DigestAuth) incrementRateLimit(remoteAddr string) {
+	remoteAddr = rateLimitKey(remoteAddr)
+
 	da.mutex.Lock()
 	defer da.mutex.Unlock()
 
@@ -926,6 +952,14 @@ func (da *DigestAuth) incrementRateLimit(remoteAddr string) {
 	rateData, exists := da.rateLimits[remoteAddr]
 
 	if !exists {
+		if len(da.rateLimits) >= maxRateLimitEntries {
+			if da.logger != nil {
+				da.logger.Warn("rate limit table full, not tracking new client",
+					zap.String("remote_addr", remoteAddr),
+					zap.Int("entries", len(da.rateLimits)))
+			}
+			return
+		}
 		rateData = &rateLimitData{
 			Attempts: 1,
 			FirstTry: now,
@@ -938,6 +972,8 @@ func (da *DigestAuth) incrementRateLimit(remoteAddr string) {
 
 // resetRateLimit resets the rate limit for a client
 func (da *DigestAuth) resetRateLimit(remoteAddr string) {
+	remoteAddr = rateLimitKey(remoteAddr)
+
 	da.mutex.Lock()
 	defer da.mutex.Unlock()
 	delete(da.rateLimits, remoteAddr)

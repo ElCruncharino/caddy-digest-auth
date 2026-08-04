@@ -477,7 +477,7 @@ func TestNonceExpiration(t *testing.T) {
 	}
 
 	// Should be valid immediately
-	stale, _ := da.validateNonce(nonce)
+	stale, _ := da.validateNonce(nonce, "")
 	if stale {
 		t.Error("Nonce should be valid immediately after generation")
 	}
@@ -486,7 +486,7 @@ func TestNonceExpiration(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Should now be stale
-	stale, _ = da.validateNonce(nonce)
+	stale, _ = da.validateNonce(nonce, "")
 	if !stale {
 		t.Error("Nonce should be stale after expiration")
 	}
